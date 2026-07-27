@@ -200,3 +200,11 @@ UNIVERSE = [
 DB_PATH = "catalysts.db"
 USER_AGENT = "catalyst-sourcing/0.1 (research use)"
 REQUEST_TIMEOUT = 30
+
+# CMS publishes HCPCS on a QUARTERLY cycle, and radiopharma codes land a few
+# times a year at most (the most recent as of build was 2024-07-01). A 10-day
+# window is structurally empty for this source, so the CMS puller treats this as
+# a floor on its lookback — it is not a bug when it returns nothing.
+CMS_MIN_LOOKBACK_DAYS = 120
+CMS_HCPCS_PAGE = ("https://www.cms.gov/medicare/coding-billing/"
+                  "healthcare-common-procedure-system/quarterly-update")

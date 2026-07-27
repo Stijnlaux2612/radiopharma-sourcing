@@ -7,11 +7,15 @@ KeyError on a Tuesday morning should not take down the whole run.
 """
 
 import datetime as dt
+import io
 import re
+import zipfile
 
 import requests
 
 from config import (
+    CMS_HCPCS_PAGE,
+    CMS_MIN_LOOKBACK_DAYS,
     DEVICE_TERMS,
     LOOKBACK_DAYS,
     RADIOPHARMA_TERMS,
@@ -528,8 +532,139 @@ def pull_fda_approvals(days=LOOKBACK_DAYS):
     return out
 
 
+# --------------------------------------------------------------------------- #
+# CMS — HCPCS quarterly update
+#
+# Reimbursement often gates commercial viability in radiopharma more than
+# efficacy does, so a new HCPCS code (or a termination date appearing on an
+# existing one) is a real catalyst.
+#
+# There is no CMS API for this: data.cms.gov's catalogue carries spending
+# datasets but not code issuance. The quarterly ZIP is the source of truth. It
+# contains a fixed-width .txt plus the record layout that defines the offsets
+# below, so no Excel dependency is needed.
+#
+# Deliberately NOT covered here:
+#   * OPPS pass-through status (Addendum B) — the download links on cms.gov are
+#     rendered client-side, so plain HTTP cannot reach the file.
+#   * NTAP decisions — published only as PDFs.
+# Both need a different mechanism than this puller; see RUNBOOK 3.1.
+# --------------------------------------------------------------------------- #
+
+# Offsets are 1-based in the CMS record layout; converted to slices here.
+_HCPCS_FIELDS = {
+    "code":  (0, 5),        # 1-5
+    "long":  (11, 91),      # 12-91
+    "short": (91, 119),     # 92-119
+    "added": (268, 276),    # 269-276  YYYYMMDD
+    "eff":   (276, 284),    # 277-284
+    "term":  (284, 292),    # 285-292
+}
+_HCPCS_MIN_LEN = 292
+
+
+def _hcpcs_latest_zip_url():
+    """Newest quarterly ZIP link from the CMS page. Returns None on failure.
+
+    The page lists newest first. Scraped rather than constructed from today's
+    date because the filename has drifted ('...-hcpcs-file.zip' vs
+    '...-hcpcs-files.zip') and a guessed URL silently 404s.
+    """
+    try:
+        r = requests.get(CMS_HCPCS_PAGE, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        r.raise_for_status()
+    except Exception as e:  # noqa: BLE001
+        print(f"  [cms] could not load the HCPCS index page: {e}")
+        return None
+    links = re.findall(r'href="([^"]*alpha-numeric-hcpcs-files?\.zip)"', r.text, re.I)
+    if not links:
+        print("  [cms] no HCPCS ZIP link found — page structure may have changed")
+        return None
+    href = links[0]
+    return href if href.startswith("http") else "https://www.cms.gov" + href
+
+
+def _iso(raw: str):
+    """'20240701' -> date, or None if absent/malformed."""
+    raw = (raw or "").strip()
+    if len(raw) != 8 or not raw.isdigit():
+        return None
+    try:
+        return dt.date(int(raw[:4]), int(raw[4:6]), int(raw[6:]))
+    except ValueError:
+        return None
+
+
+def pull_cms(days=LOOKBACK_DAYS):
+    """New, newly-effective and terminating radiopharma HCPCS codes."""
+    # Quarterly source: a 10-day window would always be empty, so widen.
+    days = max(days, CMS_MIN_LOOKBACK_DAYS)
+    since = _since(days)
+
+    url = _hcpcs_latest_zip_url()
+    if not url:
+        return []
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=max(REQUEST_TIMEOUT, 90))
+        r.raise_for_status()
+        zf = zipfile.ZipFile(io.BytesIO(r.content))
+        names = [n for n in zf.namelist()
+                 if n.lower().endswith(".txt") and "recordlayout" not in n.lower()
+                 and "proc_notes" not in n.lower()]
+        if not names:
+            print("  [cms] ZIP contained no data .txt — layout may have changed")
+            return []
+        raw = zf.read(names[0]).decode("latin-1", errors="replace")
+    except Exception as e:  # noqa: BLE001
+        print(f"  [cms] fetch/unpack failed: {e}")
+        return []
+
+    out = []
+    scanned = matched = 0
+    for line in raw.splitlines():
+        if len(line) < _HCPCS_MIN_LEN:
+            continue
+        scanned += 1
+        f = {k: line[a:b].strip() for k, (a, b) in _HCPCS_FIELDS.items()}
+        desc = _clean(f["long"] or f["short"])
+        if not (f["code"] and desc):
+            continue
+        if not (_ISOTOPE_RX.search(desc) or _MODALITY_RX.search(desc)):
+            continue
+        matched += 1
+
+        added = _iso(f["added"])
+
+        # One record per action in the window. A code can legitimately produce
+        # more than one (added and terminated in the same quarter).
+        for label, key in (("New HCPCS code", "added"),
+                           ("HCPCS code effective", "eff"),
+                           ("HCPCS code TERMINATING", "term")):
+            d = _iso(f[key])
+            if not d or d < since:
+                continue
+            # An effective date on a code added long ago is CMS re-dating its
+            # back catalogue, not a catalyst — 14 of 15 hits in testing were a
+            # bulk 2025-01-01 reset on decades-old Tc-99m codes. Only report an
+            # effective date when the code itself is also new in this window.
+            if key == "eff" and (not added or added < since):
+                continue
+            out.append({
+                "date": d.isoformat(),
+                "source": "CMS HCPCS",
+                "ref": f["code"],
+                "text": f"{label}: {f['code']} | {desc}",
+                "in_universe": bool(_hits_universe(desc)),
+            })
+
+    print(f"  [cms] {scanned} codes scanned, {matched} radiopharma, "
+          f"{len(out)} action(s) in the last {days}d")
+    return out
+
+
 PULLERS = {
     "clinicaltrials": pull_clinicaltrials,
     "fda_510k": pull_fda_510k,
     "fda_approvals": pull_fda_approvals,
+    "cms": pull_cms,
 }
