@@ -186,9 +186,15 @@ UNIVERSE = [
     "CheMatech",                    # independent, ICMUB spin-off
 
     # -- China / APAC --
-    "Sinotau Pharmaceutical Group",  # found via CTG 2026-07; first entry here
-    # -- Further China/APAC names if you widen cross-border coverage:
-    #    Full-Life Technologies, Zonsen PepLib, Primo Biotechnology
+    # Sinotau was found live; the other three came off the shortlist that used
+    # to sit here as a comment. Unlike every other name added this session,
+    # these three have not yet been seen in a live sponsor field, so their real
+    # API spelling is unconfirmed and no aliases are guessed for them. Add
+    # aliases when an actual sponsor string turns up that should have matched.
+    "Sinotau Pharmaceutical Group",  # found via CTG 2026-07
+    "Full-Life Technologies",
+    "Zonsen PepLib",
+    "Primo Biotechnology",
 ]
 
 DB_PATH = "catalysts.db"

@@ -66,6 +66,8 @@ _SHORT_ALIASES = {
     "GE HealthCare": ["ge hlthcare", "ge healthcare inc"],   # NOT bare 'ge'
     "Sinotau Pharmaceutical Group": ["sinotau"],
     "QSAM Therapeutics": ["qsam"],
+    # hyphen-less spelling is equally common in sponsor fields
+    "Full-Life Technologies": ["full life technologies"],
 }
 
 
