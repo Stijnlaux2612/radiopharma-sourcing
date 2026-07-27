@@ -5,6 +5,7 @@ weekly pull for as long as it sits in the lookback window, and CHMP items get
 republished. Without hashing you re-screen (and re-pay for) the same records.
 """
 
+import datetime as _dt
 import hashlib
 import sqlite3
 from contextlib import contextmanager
@@ -123,7 +124,57 @@ def upsert_trial_states(rows) -> None:
 
 
 def to_feed_lines(records) -> str:
-    """Render records in the pipe-delimited format the screening tool expects."""
+    """Render records in the pipe-delimited format the screening tool expects.
+
+    This format is a contract with the React screening artifact — do not change
+    it. The human-readable version lives in to_digest() instead.
+    """
     return "\n".join(
         f"{r['date']} | {r['source']} | {r['text']}" for r in records
     )
+
+
+def to_digest(records) -> str:
+    """Human-readable weekly digest: leads first, then everything by source.
+
+    Ranking is NOT done here — that belongs to the screening tool. This only
+    surfaces universe matches and phase transitions, which are already-computed
+    flags, so nothing about the scoring philosophy moves into this pipeline.
+    """
+    if not records:
+        return "No new records this run.\n"
+
+    def line(r):
+        return f"  {r['date']}  {r['source']:<22}  {r['text']}"
+
+    today = _dt.date.today().isoformat()
+    out = [f"RADIOPHARMA CATALYST DIGEST — {today}",
+           "=" * 78,
+           f"{len(records)} record(s) awaiting screening"]
+
+    transitions = [r for r in records if "PHASE TRANSITION" in r["text"]]
+    leads = [r for r in records if r["in_universe"] and r not in transitions]
+
+    if transitions:
+        out += ["", f"PHASE TRANSITIONS ({len(transitions)}) — trials that moved",
+                "-" * 78]
+        out += [line(r) for r in sorted(transitions, key=_by_date)]
+
+    if leads:
+        out += ["", f"WATCHLIST MATCHES ({len(leads)})", "-" * 78]
+        out += [line(r) for r in sorted(leads, key=_by_date)]
+
+    rest = [r for r in records if r not in transitions and r not in leads]
+    if rest:
+        out += ["", f"OTHER ({len(rest)}) — by source", "-" * 78]
+        for src in sorted({r["source"] for r in rest}):
+            out.append(f"\n  [{src}]")
+            out += [line(r) for r in sorted(
+                [r for r in rest if r["source"] == src], key=_by_date)]
+
+    out.append("")
+    return "\n".join(out) + "\n"
+
+
+def _by_date(r):
+    return (r["date"], r["source"])

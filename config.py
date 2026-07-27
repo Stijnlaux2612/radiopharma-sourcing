@@ -208,3 +208,9 @@ REQUEST_TIMEOUT = 30
 CMS_MIN_LOOKBACK_DAYS = 120
 CMS_HCPCS_PAGE = ("https://www.cms.gov/medicare/coding-billing/"
                   "healthcare-common-procedure-system/quarterly-update")
+
+# CHMP meets monthly, so a 10-day window misses most opinion cycles. Same idea
+# as the CMS floor above.
+EMA_MIN_LOOKBACK_DAYS = 30
+EMA_MEDICINES_XLSX = ("https://www.ema.europa.eu/en/documents/report/"
+                      "medicines-output-medicines-report_en.xlsx")

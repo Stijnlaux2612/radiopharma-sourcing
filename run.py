@@ -12,7 +12,13 @@ import sys
 
 from config import LOOKBACK_DAYS
 from pullers import PULLERS
-from store import insert_many, mark_screened, to_feed_lines, unscreened
+from store import (
+    insert_many,
+    mark_screened,
+    to_digest,
+    to_feed_lines,
+    unscreened,
+)
 
 
 def main(argv):
@@ -46,10 +52,15 @@ def main(argv):
     with open("feed.txt", "w") as f:
         f.write(to_feed_lines(pending) + "\n")
 
+    # Human-readable companion. feed.txt stays the machine format the screening
+    # tool consumes; digest.txt is the one to actually read on a Monday.
+    with open("digest.txt", "w") as f:
+        f.write(to_digest(pending))
+
     hits = sum(1 for r in pending if r["in_universe"])
     print(f"\n{total} new records this run")
     print(f"{len(pending)} awaiting screening ({hits} match the universe)")
-    print("written to feed.txt")
+    print("written to feed.txt and digest.txt")
 
     if "--mark" in sys.argv:
         mark_screened([r["hash"] for r in pending])

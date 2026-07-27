@@ -15,6 +15,8 @@ import zipfile
 import requests
 
 from config import (
+    EMA_MEDICINES_XLSX,
+    EMA_MIN_LOOKBACK_DAYS,
     CMS_HCPCS_PAGE,
     CMS_MIN_LOOKBACK_DAYS,
     DEVICE_TERMS,
@@ -74,6 +76,9 @@ _SHORT_ALIASES = {
     "QSAM Therapeutics": ["qsam"],
     # hyphen-less spelling is equally common in sponsor fields
     "Full-Life Technologies": ["full life technologies"],
+    # EMA lists the EU entity, which shares no phrase with the canonical name
+    "SHINE Technologies": ["shine europe"],
+    "ITM Isotope Technologies": ["itm medical isotopes"],
 }
 
 
@@ -850,10 +855,140 @@ def pull_cms_passthrough(days=LOOKBACK_DAYS):
     return out
 
 
+# --------------------------------------------------------------------------- #
+# EMA — CHMP opinions and EU regulatory actions
+#
+# Closes the Europe blind spot. It matters here more than the source count
+# suggests: the isotope-supply layer of the watchlist is overwhelmingly European
+# (ITM, Curium, Orano Med, IRE ELiT, Eckert & Ziegler, SHINE), and none of it
+# shows up in an FDA-only regulatory feed.
+#
+# EMA publishes a structured medicines report, so no page scraping and no PDF
+# parsing — the CHMP agendas themselves are PDFs and would be far more fragile.
+#
+# Relevance is decided by ATC code, not text: V09 is diagnostic
+# radiopharmaceuticals and V10 therapeutic, which is exact where text matching
+# is not. Text matching alone pulled in pneumococcal vaccines and a porcine
+# vaccine ('Coliprotec F4/F18' reads as fluorine-18). It is kept only as a
+# fallback for products whose ATC is genuinely not yet assigned — that is how
+# Cuprymina (copper (64Cu) chloride) still qualifies.
+# --------------------------------------------------------------------------- #
+
+_EMA_COLS = {
+    "name": 1, "status": 3, "inn": 6, "substance": 7,
+    "atc": 11, "mah": 25, "ec_decision": 26, "opinion": 29,
+    "withdrawal": 30, "authorisation": 31, "refusal": 32, "url": 38,
+}
+
+# (column, label) — one record per dated action that falls in the window.
+_EMA_EVENTS = [
+    ("opinion",       "CHMP OPINION adopted"),
+    ("authorisation", "EU marketing authorisation"),
+    ("refusal",       "EU marketing authorisation REFUSED"),
+    ("withdrawal",    "EU application WITHDRAWN"),
+    ("ec_decision",   "EC decision"),
+]
+
+
+def _ema_date(v):
+    """EMA dates arrive as datetime or as 'DD/MM/YYYY'. Returns date or None."""
+    if isinstance(v, dt.datetime):
+        return v.date()
+    if isinstance(v, dt.date):
+        return v
+    s = str(v or "").strip()
+    m = re.match(r"(\d{2})/(\d{2})/(\d{4})$", s)
+    if not m:
+        return None
+    try:
+        return dt.date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+    except ValueError:
+        return None
+
+
+def pull_ema(days=LOOKBACK_DAYS):
+    """CHMP opinions and EU regulatory actions on radiopharmaceuticals."""
+    try:
+        import openpyxl
+    except ImportError:
+        print("  [ema] openpyxl not installed — run: pip install -r requirements.txt")
+        return []
+
+    days = max(days, EMA_MIN_LOOKBACK_DAYS)
+    since = _since(days)
+
+    try:
+        r = requests.get(EMA_MEDICINES_XLSX, headers=HEADERS,
+                         timeout=max(REQUEST_TIMEOUT, 120))
+        r.raise_for_status()
+        wb = openpyxl.load_workbook(io.BytesIO(r.content), read_only=True,
+                                    data_only=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"  [ema] fetch failed: {e}")
+        return []
+
+    ws = wb[wb.sheetnames[0]]
+    rows = list(ws.iter_rows(values_only=True))
+    hdr_i = next((i for i, row in enumerate(rows)
+                  if row and str(row[1] or "").strip() == "Name of medicine"), None)
+    if hdr_i is None:
+        print("  [ema] no 'Name of medicine' header — report layout changed")
+        return []
+
+    def cell(row, key):
+        i = _EMA_COLS[key]
+        return str(row[i]).strip() if i < len(row) and row[i] is not None else ""
+
+    out = []
+    total = radio = 0
+    for row in rows[hdr_i + 1:]:
+        if not row or not row[_EMA_COLS["name"]]:
+            continue
+        # Veterinary products share the report and produce false matches.
+        if str(row[0] or "").strip().lower() != "human":
+            continue
+        total += 1
+
+        atc = cell(row, "atc").upper()
+        if atc.startswith(("V09", "V10")):
+            pass
+        elif atc and not atc.startswith("NOT YET"):
+            continue          # a real, non-radiopharma ATC — exclude
+        elif not _looks_radiopharma(" ".join(
+                cell(row, k) for k in ("name", "inn", "substance"))):
+            continue
+        radio += 1
+
+        name = cell(row, "name")
+        mah = cell(row, "mah") or "Undisclosed"
+        status = cell(row, "status")
+        inn = cell(row, "inn")
+
+        for key, label in _EMA_EVENTS:
+            d = _ema_date(row[_EMA_COLS[key]] if _EMA_COLS[key] < len(row) else None)
+            if not d or d < since or d > dt.date.today():
+                continue
+            out.append({
+                "date": d.isoformat(),
+                "source": "EMA",
+                "ref": cell(row, "url") or name,
+                "text": (f"{label}: {name}"
+                         + (f" ({inn})" if inn and inn.lower() != name.lower() else "")
+                         + f" | status: {status or '-'} | ATC: {atc or '-'}"
+                         f" | MAH: {mah}"),
+                "in_universe": bool(_hits_universe(f"{mah} {name} {inn}")),
+            })
+
+    print(f"  [ema] {total} human medicines, {radio} radiopharma, "
+          f"{len(out)} action(s) in the last {days}d")
+    return out
+
+
 PULLERS = {
     "clinicaltrials": pull_clinicaltrials,
     "fda_510k": pull_fda_510k,
     "fda_approvals": pull_fda_approvals,
     "cms": pull_cms,
     "cms_passthrough": pull_cms_passthrough,
+    "ema": pull_ema,
 }

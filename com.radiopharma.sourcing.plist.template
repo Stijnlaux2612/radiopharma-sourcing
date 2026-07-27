@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.radiopharma.sourcing</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/stijnlauxtermann/Desktop/Radiopharma-sourcer/run_weekly.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/stijnlauxtermann/Desktop/Radiopharma-sourcer</string>
+
+    <!-- Mondays at 08:00. Weekday 1 = Monday. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key><integer>1</integer>
+        <key>Hour</key><integer>8</integer>
+        <key>Minute</key><integer>0</integer>
+    </dict>
+
+    <!-- If the Mac was asleep at 08:00, run once it wakes rather than skipping. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/stijnlauxtermann/Desktop/Radiopharma-sourcer/run.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/stijnlauxtermann/Desktop/Radiopharma-sourcer/run.log</string>
+</dict>
+</plist>

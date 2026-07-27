@@ -1,5 +1,7 @@
 # Install with:  pip install -r requirements.txt
 #
-# requests is the only third-party dependency; everything else the pipeline
-# uses (sqlite3, hashlib, re, datetime) is in the Python standard library.
+# requests handles every HTTP source. openpyxl is needed only by the EMA puller:
+# EMA publishes its medicines report as .xlsx with no CSV equivalent. Everything
+# else (sqlite3, csv, zipfile, hashlib, re, datetime) is standard library.
 requests>=2.32
+openpyxl>=3.1
