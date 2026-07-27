@@ -1,0 +1,5 @@
+# Install with:  pip install -r requirements.txt
+#
+# requests is the only third-party dependency; everything else the pipeline
+# uses (sqlite3, hashlib, re, datetime) is in the Python standard library.
+requests>=2.32

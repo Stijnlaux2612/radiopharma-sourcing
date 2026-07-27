@@ -24,6 +24,18 @@ CREATE TABLE IF NOT EXISTS records (
 );
 CREATE INDEX IF NOT EXISTS idx_date ON records(date);
 CREATE INDEX IF NOT EXISTS idx_screened ON records(screened);
+
+-- Last-seen phase/status per trial, keyed on NCT ID. Separate from `records`
+-- because it is current state, not an event: exactly one row per trial, updated
+-- in place. Diffing this against an incoming pull is what turns a stream of
+-- "here is the phase again" updates into "this trial moved Ph2 -> Ph3".
+CREATE TABLE IF NOT EXISTS trial_state (
+    nct        TEXT PRIMARY KEY,
+    phase      TEXT,
+    status     TEXT,
+    first_seen TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated    TEXT DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -73,6 +85,40 @@ def mark_screened(hashes):
     with db() as conn:
         conn.executemany(
             "UPDATE records SET screened = 1 WHERE hash = ?", [(h,) for h in hashes]
+        )
+
+
+def get_trial_states(ncts=None) -> dict:
+    """Last-seen {phase, status} keyed by NCT ID. Empty dict for unseen trials."""
+    ncts = [n for n in (ncts or []) if n]
+    if not ncts:
+        return {}
+    out = {}
+    with db() as conn:
+        # chunked so a large pull cannot exceed SQLite's variable limit
+        for i in range(0, len(ncts), 500):
+            chunk = ncts[i:i + 500]
+            qs = ",".join("?" * len(chunk))
+            for r in conn.execute(
+                f"SELECT nct, phase, status FROM trial_state WHERE nct IN ({qs})",
+                chunk,
+            ):
+                out[r["nct"]] = {"phase": r["phase"], "status": r["status"]}
+    return out
+
+
+def upsert_trial_states(rows) -> None:
+    """Record current phase/status per NCT. `rows` is an iterable of
+    (nct, phase, status). Called AFTER transitions have been computed."""
+    rows = [(n, p, s) for n, p, s in rows if n]
+    if not rows:
+        return
+    with db() as conn:
+        conn.executemany(
+            "INSERT INTO trial_state (nct, phase, status) VALUES (?, ?, ?) "
+            "ON CONFLICT(nct) DO UPDATE SET phase=excluded.phase, "
+            "status=excluded.status, updated=CURRENT_TIMESTAMP",
+            rows,
         )
 
 

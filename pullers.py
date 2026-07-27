@@ -19,6 +19,7 @@ from config import (
     UNIVERSE,
     USER_AGENT,
 )
+from store import get_trial_states, upsert_trial_states
 
 HEADERS = {"User-Agent": USER_AGENT}
 
@@ -208,6 +209,43 @@ def _is_commercial(sponsor: str) -> bool:
     return not _NONCOMMERCIAL_RX.search(sponsor or "")
 
 
+# --------------------------------------------------------------------------- #
+# Phase / status transitions
+#
+# A trial sitting in the lookback window is re-reported every week with its
+# CURRENT phase, which says nothing about movement. The signal worth having is
+# the change: Ph2 -> Ph3, or RECRUITING -> TERMINATED. That requires memory, so
+# the last-seen phase/status per NCT lives in store.trial_state and each pull is
+# diffed against it.
+#
+# A trial seen for the first time is NOT a transition — there is no prior value
+# to have moved from, and emitting one would fire a false transition for every
+# trial on the very first run.
+# --------------------------------------------------------------------------- #
+
+_PHASE_LABEL = {
+    "EARLY_PHASE1": "EarlyPh1", "PHASE1": "Ph1", "PHASE2": "Ph2",
+    "PHASE3": "Ph3", "PHASE4": "Ph4", "NA": "N/A",
+}
+
+
+def _pretty_phase(raw: str) -> str:
+    """'PHASE1, PHASE2' -> 'Ph1, Ph2'. Unknown values pass through unchanged."""
+    if not raw:
+        return "N/A"
+    return ", ".join(_PHASE_LABEL.get(p.strip(), p.strip()) for p in raw.split(","))
+
+
+def _describe_transition(prior: dict, phase: str, status: str) -> str:
+    """Human-readable transition, or '' if nothing moved."""
+    parts = []
+    if prior.get("phase") != phase:
+        parts.append(f"{_pretty_phase(prior.get('phase'))} → {_pretty_phase(phase)}")
+    if prior.get("status") != status:
+        parts.append(f"{prior.get('status') or 'unknown'} → {status}")
+    return "; ".join(parts)
+
+
 def _relevance_blob(ps: dict) -> str:
     """Title + summary + intervention names — the fields that name the agent."""
     ident = ps.get("identificationModule", {}) or {}
@@ -241,6 +279,7 @@ def pull_clinicaltrials(terms=None, days=LOOKBACK_DAYS):
     out = []
     dropped = 0
     non_commercial = 0
+    current = {}          # nct -> (phase, status) as seen in THIS run
 
     for term in terms:
         studies = []
@@ -307,6 +346,7 @@ def pull_clinicaltrials(terms=None, days=LOOKBACK_DAYS):
                 continue
 
             text = f"{title} | phase: {phases} | status: {state} | sponsor: {lead}"
+            current[nct] = (phases, state)
             out.append({
                 "date": date,
                 "source": "ClinicalTrials.gov",
@@ -315,10 +355,30 @@ def pull_clinicaltrials(terms=None, days=LOOKBACK_DAYS):
                 "in_universe": bool(hit),
             })
 
+    # --- transition detection -------------------------------------------- #
+    # Diff against the last-seen state BEFORE writing the new one, otherwise
+    # every trial compares against itself and nothing ever looks like a change.
+    priors = get_trial_states(list(current))
+    # A trial matched by several search terms appears in `out` more than once,
+    # so count distinct NCTs — counting rows overstates it (10 rows, 3 trials).
+    transitioned = set()
+    for r in out:
+        prior = priors.get(r["ref"])
+        if not prior:                     # first sighting: not a transition
+            continue
+        phase, state = current[r["ref"]]
+        moved = _describe_transition(prior, phase, state)
+        if moved:
+            transitioned.add(r["ref"])
+            r["text"] = f"PHASE TRANSITION: {moved} | {r['text']}"
+    transitions = len(transitioned)
+    upsert_trial_states((n, p, s) for n, (p, s) in current.items())
+
     if dropped:
         print(f"  [ctg] relevance guard dropped {dropped} off-topic hits")
     if non_commercial:
         print(f"  [ctg] sponsor filter dropped {non_commercial} academic/government records")
+    print(f"  [ctg] {len(current)} trials tracked, {transitions} transition(s) detected")
     return out
 
 
