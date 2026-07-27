@@ -123,12 +123,17 @@ UNIVERSE = [
     "PentixaPharm",
     "Theragnostics",
     "Noria Therapeutics",
+    "QSAM Therapeutics",        # Sm-153 bone therapy; found via CTG 2026-07
 
     # -- Diagnostics developers --
     "Blue Earth Diagnostics",
     "MedTrace",
     "Nuclidium",
     "Nucligen",
+    "GE HealthCare",            # DaTscan (I-123 ioflupane); drugsfda 2026-04
+    "Aphelion",                 # sponsor of record for PYLARIFY TRUVU (ORIG,
+                                # 2026-03). Relationship to Lantheus/Progenics
+                                # unverified — confirm before relying on it.
 
     # -- Isotope supply / production --
     "Curium",
@@ -180,7 +185,9 @@ UNIVERSE = [
     "Macrocyclics",                 # Orano Med-owned, French state-linked
     "CheMatech",                    # independent, ICMUB spin-off
 
-    # -- Add China/APAC names here if you decide to widen cross-border coverage:
+    # -- China / APAC --
+    "Sinotau Pharmaceutical Group",  # found via CTG 2026-07; first entry here
+    # -- Further China/APAC names if you widen cross-border coverage:
     #    Full-Life Technologies, Zonsen PepLib, Primo Biotechnology
 ]
 

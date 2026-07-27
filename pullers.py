@@ -61,6 +61,11 @@ _SHORT_ALIASES = {
     "Seibersdorf Laboratories": ["seibersdorf"],
     "NorthStar Medical Radioisotopes": ["northstar"],
     "ABX advanced biochemical compounds": ["abx gmbh"],  # NOT bare 'abx' (collides w/ ABX-CRO)
+    # drugsfda abbreviates sponsors ('GE HLTHCARE INC'), so the canonical
+    # spelling alone would never match the string the API actually returns.
+    "GE HealthCare": ["ge hlthcare", "ge healthcare inc"],   # NOT bare 'ge'
+    "Sinotau Pharmaceutical Group": ["sinotau"],
+    "QSAM Therapeutics": ["qsam"],
 }
 
 
