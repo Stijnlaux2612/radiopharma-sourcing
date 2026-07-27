@@ -51,6 +51,24 @@ RADIOPHARMA_TERMS = [
     "somatostatin receptor radionuclide",
     "FAP targeted radionuclide",
     "GRPR radionuclide",
+
+    # -----------------------------------------------------------------------
+    # DIAGNOSTICS. Named agents and target-specific PET, not bare modality.
+    # Generic "PET"/"SPECT"/"F-18 FDG" stay out — they return routine hospital
+    # imaging, not company programmes. These terms name commercial tracers or a
+    # specific target, so they surface the diagnostics developers on the
+    # watchlist (Blue Earth, MedTrace, Nuclidium, Nucligen) and their peers.
+    # -----------------------------------------------------------------------
+    "PSMA PET",
+    "FAPI PET",
+    "somatostatin receptor PET",
+    "piflufolastat",        # Pylarify — Lantheus
+    "flotufolastat",        # Posluma — Blue Earth
+    "gozetotide",           # PSMA-11 — Locametz / Illuccix
+    "fluciclovine",         # Axumin — Blue Earth
+    "fluoroestradiol",      # Cerianna — ER imaging
+    "PSMA-1007",
+    "DCFPyL",
 ]
 
 # Device-side terms for openFDA 510(k)/PMA — the imaging/dosimetry adjacency.

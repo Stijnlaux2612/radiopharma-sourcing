@@ -44,7 +44,7 @@ def main(argv):
         return
 
     with open("feed.txt", "w") as f:
-        f.write(to_feed_lines(pending))
+        f.write(to_feed_lines(pending) + "\n")
 
     hits = sum(1 for r in pending if r["in_universe"])
     print(f"\n{total} new records this run")

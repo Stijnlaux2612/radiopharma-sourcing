@@ -1,0 +1,11 @@
+# Run artifacts — regenerated every run, not source
+catalysts.db
+*.db.bak
+*.prepatch.bak
+feed.txt
+
+# Local tooling
+.claude/
+__pycache__/
+*.pyc
+.DS_Store

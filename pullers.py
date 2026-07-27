@@ -100,6 +100,126 @@ def _clean(s: str) -> str:
 # --------------------------------------------------------------------------- #
 
 CTG_URL = "https://clinicaltrials.gov/api/v2/studies"
+CTG_PAGE_SIZE = 100
+CTG_MAX_PAGES = 20      # runaway guard: 2000 studies per term is far beyond normal
+
+
+# --------------------------------------------------------------------------- #
+# Relevance guard
+#
+# `query.term` is a full-text search over the WHOLE study record — title,
+# summary, eligibility, outcome measures. It already ANDs its tokens, so the
+# query is not malformed; the problem is that some of our terms are ordinary
+# English words. "targeted alpha therapy" returned 30 studies of which 29 were
+# irrelevant: a physiotherapy trial reporting Cronbach's *alpha* contains all
+# three tokens legitimately.
+#
+# Quoting the phrase is NOT the fix — it drops the concept-pair terms that work
+# ("PSMA radionuclide" 4 -> 0, "FAP targeted radionuclide" 2 -> 0), because
+# those aren't literal phrases anyone writes in a protocol.
+#
+# So the query stays broad (the discovery net is the point) and results are
+# validated instead: a study is kept only if an isotope notation or a genuine
+# radio-modality word appears in its title, summary or intervention names.
+# Deliberately does NOT accept bare "PET"/"SPECT"/"F-18"/"Ga-68" — per config.py
+# those flood the net with routine imaging.
+# --------------------------------------------------------------------------- #
+
+# Isotope notation. CASE-SENSITIVE and tightly bound on purpose: element symbols
+# are always properly capitalised, and allowing whitespace between the mass number
+# and the symbol produced real false positives — "day -4 at 14.5 mg/kg" matched as
+# mass-4 astatine, and a case-insensitive "30min" would match as indium.
+_SYM = "Lu|Ac|Pb|Cu|Tb|Tc|Ga|Zr|Sc|Sm|Ho|Re|Er|In|At|Bi|Ra|Y|I|F"
+# C/N/O are valid only in brackets, for the short-lived PET nuclides ([11C], [13N],
+# [15O]). C-14 and tritium are excluded: those labels mark mass-balance ADME
+# studies, which every oral drug programme runs — a lab technique, never a
+# radiopharma product.
+_SYM_BRACKET = _SYM + "|C|N|O"
+_ISOTOPE_RX = re.compile(
+    r"\[(?!14C\]|3H\]|2H\])\d{1,3}m?(?:" + _SYM_BRACKET + r")\]"   # [177Lu], [68Ga], [11C]
+    r"|\b\d{1,3}m?(?:" + _SYM + r")\b"        # 177Lu, 99mTc, 223Ra  (no space)
+    r"|\b(?:" + _SYM + r")-\d{1,3}\b"         # Lu-177, Ac-225       (no space)
+)
+
+# Elements that essentially only appear in a nuclear-medicine context.
+_ELEM_STRONG = "lutetium|actinium|astatine|terbium|radium|bismuth|technetium"
+# Elements with heavy non-nuclear usage (copper metabolism, iodine supplementation,
+# contrast media). Require an adjacent mass number before trusting them.
+_ELEM_WEAK = ("copper|iodine|gallium|yttrium|samarium|holmium|rhenium|erbium|"
+              "scandium|zirconium|indium|fluorine")
+
+_MODALITY_RX = re.compile(
+    r"\b(?:" + _ELEM_STRONG + r")\b"
+    r"|\b(?:" + _ELEM_WEAK + r")[- ]?\d{1,3}\b"
+    # radio-* modality words. NOT "radioactiv*" — that matches the "radioactive
+    # seeds" boilerplate in ordinary radiation-oncology trials. NOT "brachytherapy"
+    # either: sealed-source radiation is a different modality from radiopharma.
+    # NOT plain "radiother*" either — external-beam radiotherapy is a linac, not a
+    # drug. Genuine radiopharma trials that mention it also carry isotope notation.
+    r"|\bradio(?:ligand|nuclide|pharmaceutic|immunother|conjugat|iodin|label|isotop)\w*"
+    r"|\btheranostic\w*|\bpsma\b|\bdotatate\b|\bdotatoc\b"
+    r"|\blutathera\b|\bpluvicto\b|\bprrt\b"
+    r"|\balpha[- ]emitt\w*|\bscintigraph\w*",
+    re.I,
+)
+
+
+# --------------------------------------------------------------------------- #
+# Commercial-sponsor filter
+#
+# Academic and government sponsors run large volumes of investigator-initiated
+# imaging and treatment studies. They are on-topic but they are not company
+# catalysts — a university PET study does not move a position.
+#
+# Escape hatch: a record that matches the universe is ALWAYS kept regardless of
+# sponsor, so an academic trial that names a watchlist company still surfaces.
+# This filter is deliberately a positive match on academic/government markers
+# rather than a "must look like a company" test — the latter would suppress
+# exactly the unknown new sponsors the discovery net exists to find.
+# --------------------------------------------------------------------------- #
+
+_NONCOMMERCIAL_RX = re.compile(
+    r"\buniversit\w*|\buniversidad\b|\buniversitair\w*|\buniversitet\w*"
+    r"|\bcollege\b|\bschool of medicine\b|\bacadem\w*"
+    r"|\bhospital\w*|\bhopital\b|\bhôpital\b|\bhospices\b|\bziekenhuis\b|\bklinik\w*"
+    r"|\bcentre hospitalier\b|\bmedical cent\w+|\bcancer cent\w+|\bhealth system\b"
+    r"|\bclinic\b|\bpolyclinic\b|\binfirmary\b"
+    r"|\binstitut\w*|\bnational institute\w*|\bnih\b|\bnci\b|\bnhs\b|\binserm\b|\bcnrs\b"
+    r"|\bfoundation\b|\bfondazione\b|\bfundaci\w+|\bstiftung\b|\btrust\b"
+    r"|\bministry\b|\bdepartment of health\b|\bva \b|\bveterans\b"
+    r"|\bconsortium\b|\bcooperative group\b|\bsociety\b|\bassociation\b"
+    r"|\bcharit\w+|\bassistance publique\b|\bcancer research\b"
+    # public health authorities and research alliances that carry none of the
+    # words above — all observed leaks from the first live run
+    r"|\bcancer control\b|\bazienda\b|\birccs\b|\bausl\b|\busl\b|\bahs\b"
+    r"|\balianza\b|\balliance\b|\bcentro\b|\bcentre de\b|\bregional health\b",
+    re.I,
+)
+
+
+def _is_commercial(sponsor: str) -> bool:
+    return not _NONCOMMERCIAL_RX.search(sponsor or "")
+
+
+def _relevance_blob(ps: dict) -> str:
+    """Title + summary + intervention names — the fields that name the agent."""
+    ident = ps.get("identificationModule", {}) or {}
+    desc = ps.get("descriptionModule", {}) or {}
+    parts = [
+        ident.get("briefTitle", ""),
+        ident.get("officialTitle", ""),
+        desc.get("briefSummary", ""),
+    ]
+    arms = ps.get("armsInterventionsModule", {}) or {}
+    for iv in arms.get("interventions", []) or []:
+        parts.append(iv.get("name", "") or "")
+        parts.append(iv.get("description", "") or "")
+    return " ".join(p for p in parts if p)
+
+
+def _is_radiopharma(ps: dict) -> bool:
+    blob = _relevance_blob(ps)
+    return bool(_ISOTOPE_RX.search(blob) or _MODALITY_RX.search(blob))
 
 
 def pull_clinicaltrials(terms=None, days=LOOKBACK_DAYS):
@@ -112,25 +232,48 @@ def pull_clinicaltrials(terms=None, days=LOOKBACK_DAYS):
     terms = terms or RADIOPHARMA_TERMS
     since = _since(days).isoformat()
     out = []
+    dropped = 0
+    non_commercial = 0
 
     for term in terms:
-        params = {
-            "query.term": term,
-            "filter.advanced": f"AREA[LastUpdatePostDate]RANGE[{since},MAX]",
-            "pageSize": 50,
-            "countTotal": "true",
-        }
-        try:
-            r = requests.get(CTG_URL, params=params, headers=HEADERS,
-                             timeout=REQUEST_TIMEOUT)
-            r.raise_for_status()
-            studies = r.json().get("studies", [])
-        except Exception as e:  # noqa: BLE001
-            print(f"  [ctg] '{term}' failed: {e}")
-            continue
+        studies = []
+        token = None
+        # Paginate. Previously a single 50-result page was taken and the rest of
+        # the term's matches were discarded silently — no error, just missing
+        # records. The page cap is a runaway guard, not an expected limit.
+        for _page in range(CTG_MAX_PAGES):
+            params = {
+                "query.term": term,
+                "filter.advanced": f"AREA[LastUpdatePostDate]RANGE[{since},MAX]",
+                "pageSize": CTG_PAGE_SIZE,
+                "countTotal": "true",
+            }
+            if token:
+                params["pageToken"] = token
+            try:
+                r = requests.get(CTG_URL, params=params, headers=HEADERS,
+                                 timeout=REQUEST_TIMEOUT)
+                r.raise_for_status()
+                payload = r.json()
+            except Exception as e:  # noqa: BLE001
+                print(f"  [ctg] '{term}' failed: {e}")
+                break
+            studies.extend(payload.get("studies", []) or [])
+            token = payload.get("nextPageToken")
+            if not token:
+                break
+        else:
+            print(f"  [ctg] '{term}' hit the {CTG_MAX_PAGES}-page cap; may be truncated")
 
         for s in studies:
             ps = s.get("protocolSection", {})
+
+            # Full-text search returns unrelated studies that merely share common
+            # words with a term; require a real radiopharma signal in the record.
+            if not _is_radiopharma(ps):
+                dropped += 1
+                continue
+
             ident = ps.get("identificationModule", {})
             status = ps.get("statusModule", {})
             design = ps.get("designModule", {})
@@ -148,15 +291,27 @@ def pull_clinicaltrials(terms=None, days=LOOKBACK_DAYS):
             if len(date) == 7:          # YYYY-MM occasionally appears
                 date = f"{date}-01"
 
+            hit = _hits_universe(f"{lead} {title}")
+
+            # Academic/government sponsors are dropped unless the record names a
+            # watchlist company — a university PET study is not a company catalyst.
+            if not hit and not _is_commercial(lead):
+                non_commercial += 1
+                continue
+
             text = f"{title} | phase: {phases} | status: {state} | sponsor: {lead}"
             out.append({
                 "date": date,
                 "source": "ClinicalTrials.gov",
                 "ref": nct,
                 "text": text,
-                "in_universe": bool(_hits_universe(f"{lead} {title}")),
+                "in_universe": bool(hit),
             })
 
+    if dropped:
+        print(f"  [ctg] relevance guard dropped {dropped} off-topic hits")
+    if non_commercial:
+        print(f"  [ctg] sponsor filter dropped {non_commercial} academic/government records")
     return out
 
 
