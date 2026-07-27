@@ -6,6 +6,7 @@ Every puller parses defensively. Public APIs change shape without notice and a
 KeyError on a Tuesday morning should not take down the whole run.
 """
 
+import csv
 import datetime as dt
 import io
 import re
@@ -153,6 +154,40 @@ _ISOTOPE_RX = re.compile(
     r"|\b(?:" + _SYM + r")-\d{1,3}\b"         # Lu-177, Ac-225       (no space)
 )
 
+# CMS Addendum B descriptors are capped at 28 characters and write isotopes with
+# no separator and in lower case ('Flotufolastat f18 diag 1 mci'), which none of
+# the patterns above match. A space is deliberately NOT allowed here: 'In 100 ml'
+# would otherwise read as indium-100.
+_ISOTOPE_COMPACT_RX = re.compile(
+    r"\b(?:F|Ga|Lu|Ac|Tc|Cu|Zr|Ra|Pb|At|Sm|Ho|Tb|Sc|Bi|Er|Re|Y|I)-?\d{2,3}\b",
+    re.I,
+)
+
+# Radiopharmaceutical INN stems. Short descriptors often name the agent without
+# ever mentioning its isotope, so neither isotope pattern can catch them.
+# NOTE: these stems are deliberately NOT anchored with \b. They occur mid-word —
+# 'flortaucipir', 'flotufolastat', 'oxodotreotide' — so a leading \b would never
+# match, which is exactly why A9601 (Tauvid) was missed on the first attempt.
+# Only the short, ambiguous tokens keep boundaries.
+_AGENT_RX = re.compile(
+    r"folastat"                            # piflufolastat, flotufolastat
+    r"|taucipir|vipivotide"                # flortaucipir, Pluvicto
+    r"|dotatate|dotatoc|dotreotide"
+    r"|ioflupane|fluciclovine|fluoroestradiol|fluorodopa|flurpiridaz"
+    r"|florbeta|flutemetamol|flortaucipir"
+    r"|pentixafor|pentixather"
+    r"|exametazime|bicisate|sestamibi|mertiatide|tilmanocept"
+    r"|medronate|oxidronate|pyrophosphate"
+    r"|\bfapi\b|\bpsma\b|\bmibg\b",
+    re.I,
+)
+
+
+def _looks_radiopharma(text: str) -> bool:
+    """Single relevance test shared by every source."""
+    return bool(_ISOTOPE_RX.search(text) or _MODALITY_RX.search(text)
+                or _ISOTOPE_COMPACT_RX.search(text) or _AGENT_RX.search(text))
+
 # Elements that essentially only appear in a nuclear-medicine context.
 _ELEM_STRONG = "lutetium|actinium|astatine|terbium|radium|bismuth|technetium"
 # Elements with heavy non-nuclear usage (copper metabolism, iodine supplementation,
@@ -267,8 +302,7 @@ def _relevance_blob(ps: dict) -> str:
 
 
 def _is_radiopharma(ps: dict) -> bool:
-    blob = _relevance_blob(ps)
-    return bool(_ISOTOPE_RX.search(blob) or _MODALITY_RX.search(blob))
+    return _looks_radiopharma(_relevance_blob(ps))
 
 
 def pull_clinicaltrials(terms=None, days=LOOKBACK_DAYS):
@@ -503,7 +537,7 @@ def pull_fda_approvals(days=LOOKBACK_DAYS):
             # over a year. config.py is explicit that the universe boosts a
             # record's rank rather than qualifying it, so it only sets
             # in_universe here.
-            if not (_ISOTOPE_RX.search(names) or _MODALITY_RX.search(names)):
+            if not _looks_radiopharma(names):
                 continue
 
             for sub in app.get("submissions", []) or []:
@@ -629,7 +663,7 @@ def pull_cms(days=LOOKBACK_DAYS):
         desc = _clean(f["long"] or f["short"])
         if not (f["code"] and desc):
             continue
-        if not (_ISOTOPE_RX.search(desc) or _MODALITY_RX.search(desc)):
+        if not _looks_radiopharma(desc):
             continue
         matched += 1
 
@@ -662,9 +696,164 @@ def pull_cms(days=LOOKBACK_DAYS):
     return out
 
 
+# --------------------------------------------------------------------------- #
+# CMS — OPPS Addendum B (transitional pass-through status)
+#
+# Pass-through gives a product separate OPPS payment for a limited period rather
+# than bundling it into the procedure APC. For a radiopharmaceutical that is
+# often the difference between a hospital adopting it and not, so both GAINING
+# pass-through and its EXPIRY are commercially material.
+#
+# Status indicators: G = pass-through drug/biological, H = pass-through device.
+#
+# No state table is needed to spot changes. Records are content-hashed on
+# source|ref|text (see store.content_hash), so a code whose status indicator,
+# APC, payment rate or expiry changes produces different text and therefore a
+# new row, while an unchanged quarter produces nothing. The first run emits the
+# current pass-through set as a baseline; after that only movement appears.
+#
+# LICENSING: cms.gov fronts this ZIP with an AMA license click-through, because
+# Addendum B carries CPT (Level I) descriptors that the AMA copyrights. This
+# puller keeps ONLY Level II codes — the letter-prefixed A/C/J series that CMS
+# itself maintains — and every radiopharmaceutical lives there. No CPT
+# descriptor is parsed, stored or emitted. Raised with the user before building.
+# --------------------------------------------------------------------------- #
+
+CMS_ADDENDUM_PAGE = ("https://www.cms.gov/medicare/payment/prospective-payment-systems/"
+                     "hospital-outpatient-pps/quarterly-addenda-updates")
+_PASS_THROUGH_SI = {"G", "H"}
+
+
+def _addendum_b_url():
+    """Newest OPPS Addendum B ZIP. Returns (url, quarter_date) or (None, None).
+
+    The link is only present on the page inside an AMA license interstitial URL
+    (…/apps/ama/license.asp?file=/files/zip/<name>.zip), so the real path is
+    extracted from that query string rather than from an href.
+    """
+    try:
+        r = requests.get(CMS_ADDENDUM_PAGE, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        r.raise_for_status()
+    except Exception as e:  # noqa: BLE001
+        print(f"  [cms-pt] could not load the addenda index: {e}")
+        return None, None
+
+    months = {m: i for i, m in enumerate(
+        ["january", "february", "march", "april", "may", "june", "july",
+         "august", "september", "october", "november", "december"], start=1)}
+
+    # Step 1: the index only links to per-quarter SUB-PAGES; pick the newest.
+    best = None
+    for href in re.findall(r'href="([^"]*quarterly-addenda-updates/[^"]*addendum-b[^"]*)"',
+                           r.text, re.I):
+        m = re.search(r'(' + "|".join(months) + r')-(\d{4})', href, re.I)
+        if not m:
+            continue
+        d = dt.date(int(m.group(2)), months[m.group(1).lower()], 1)
+        if best is None or d > best[1]:
+            best = (href, d)
+    if not best:
+        print("  [cms-pt] no Addendum B sub-page found — index layout changed")
+        return None, None
+
+    href, quarter = best
+    page = href if href.startswith("http") else "https://www.cms.gov" + href
+
+    # Step 2: the ZIP path appears only inside the AMA license interstitial URL.
+    try:
+        r2 = requests.get(page, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        r2.raise_for_status()
+    except Exception as e:  # noqa: BLE001
+        print(f"  [cms-pt] could not load {page}: {e}")
+        return None, None
+    zips = re.findall(r'/files/zip/([A-Za-z0-9._\-]*addendum-b[A-Za-z0-9._\-]*\.zip)',
+                      r2.text, re.I)
+    if not zips:
+        print("  [cms-pt] no Addendum B ZIP on the quarter page — layout changed")
+        return None, None
+    return "https://www.cms.gov/files/zip/" + zips[0], quarter
+
+
+def pull_cms_passthrough(days=LOOKBACK_DAYS):
+    """Radiopharma HCPCS codes currently holding OPPS pass-through status."""
+    url, quarter = _addendum_b_url()
+    if not url:
+        return []
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=max(REQUEST_TIMEOUT, 90))
+        r.raise_for_status()
+        zf = zipfile.ZipFile(io.BytesIO(r.content))
+        names = [n for n in zf.namelist() if n.lower().endswith(".csv")]
+        if not names:
+            print("  [cms-pt] ZIP has no CSV — only the xlsx variant was published")
+            return []
+        rows = list(csv.reader(io.StringIO(
+            zf.read(names[0]).decode("latin-1", errors="replace"))))
+    except Exception as e:  # noqa: BLE001
+        print(f"  [cms-pt] fetch/unpack failed: {e}")
+        return []
+
+    hdr_i = next((i for i, row in enumerate(rows)
+                  if row and row[0].strip() == "HCPCS Code"), None)
+    if hdr_i is None:
+        print("  [cms-pt] no 'HCPCS Code' header row — layout changed")
+        return []
+    hdr = [c.strip() for c in rows[hdr_i]]
+
+    def col(*wanted, default=None):
+        for w in wanted:
+            for i, c in enumerate(hdr):
+                if c.lower() == w.lower():
+                    return i
+        return default
+
+    c_code = col("HCPCS Code", default=0)
+    c_desc = col("Short Descriptor", default=1)
+    c_si = col("SI", "Status Indicator", default=2)
+    c_apc = col("APC", default=3)
+    c_rate = col("Payment Rate")
+    c_exp = col("Drug and Device Pass-Through Expiration during Calendar Year")
+
+    out = []
+    level2 = radio = 0
+    for row in rows[hdr_i + 1:]:
+        if not row or not row[0].strip():
+            continue
+        code = row[c_code].strip()
+        # Level II only — see LICENSING note above.
+        if not code[:1].isalpha():
+            continue
+        level2 += 1
+        desc = _clean(row[c_desc] if len(row) > c_desc else "")
+        if not _looks_radiopharma(f"{code} {desc}"):
+            continue
+        radio += 1
+        si = (row[c_si].strip() if len(row) > c_si else "")
+        exp = (row[c_exp].strip() if c_exp is not None and len(row) > c_exp else "")
+        if si not in _PASS_THROUGH_SI and not exp:
+            continue
+        apc = (row[c_apc].strip() if len(row) > c_apc else "")
+        rate = (row[c_rate].strip() if c_rate is not None and len(row) > c_rate else "")
+        label = "PASS-THROUGH" if si in _PASS_THROUGH_SI else "pass-through expiring"
+        out.append({
+            "date": quarter.isoformat(),
+            "source": "CMS OPPS pass-through",
+            "ref": code,
+            "text": (f"{label}: {code} | {desc} | SI: {si or '-'} | "
+                     f"APC: {apc or '-'} | rate: {rate or '-'}"
+                     + (f" | expires: {exp}" if exp else "")),
+            "in_universe": bool(_hits_universe(desc)),
+        })
+
+    print(f"  [cms-pt] {quarter:%Y-%m} addendum: {level2} Level II codes, "
+          f"{radio} radiopharma, {len(out)} with pass-through status")
+    return out
+
+
 PULLERS = {
     "clinicaltrials": pull_clinicaltrials,
     "fda_510k": pull_fda_510k,
     "fda_approvals": pull_fda_approvals,
     "cms": pull_cms,
+    "cms_passthrough": pull_cms_passthrough,
 }
