@@ -321,6 +321,8 @@ def pull_clinicaltrials(terms=None, days=LOOKBACK_DAYS):
 
 FDA_510K = "https://api.fda.gov/device/510k.json"
 FDA_DRUG = "https://api.fda.gov/drug/drugsfda.json"
+FDA_PAGE_SIZE = 100
+FDA_MAX_RECORDS = 2000   # runaway guard; a 10-day window is ~40 applications
 
 
 def pull_fda_510k(terms=None, days=LOOKBACK_DAYS):
@@ -331,8 +333,12 @@ def pull_fda_510k(terms=None, days=LOOKBACK_DAYS):
     out = []
 
     for term in terms:
+        # The range separator must be a REAL SPACE here, not a literal '+'.
+        # openFDA's documented syntax is [start+TO+end] because '+' encodes a
+        # space in a raw URL — but requests percent-encodes a literal '+' to
+        # %2B, which produced '%2BTO%2B' and a 500 on every single query.
         params = {
-            "search": f'device_name:"{term}" AND decision_date:[{since}+TO+{today}]',
+            "search": f'device_name:"{term}" AND decision_date:[{since} TO {today}]',
             "limit": 50,
         }
         try:
@@ -368,49 +374,89 @@ def pull_fda_510k(terms=None, days=LOOKBACK_DAYS):
 
 
 def pull_fda_approvals(days=LOOKBACK_DAYS):
-    """Drug approvals filtered to radiopharma-relevant sponsors and names.
+    """Approval actions in the window, by date — not by sponsor.
 
-    drugsfda has no clean date filter on submission status, so this pulls by
-    sponsor from the universe and filters client-side. Narrow but high precision.
+    The previous version looped over all 71 universe names querying
+    sponsor_name:"<name>" and returned zero every time, silently. Two reasons:
+    drugsfda stores sponsors UPPERCASE and matches case-sensitively, and it
+    matches the WHOLE stored value rather than a sub-phrase — the real strings
+    are abbreviated corporate forms ('NOVARTIS', 'TELIX', 'ELI LILLY AND CO'),
+    so 'Telix Pharmaceuticals' could never have matched anything.
+
+    Its docstring also claimed drugsfda has no date filter. It does:
+    submissions.submission_status_date takes a range, ~41 applications over a
+    10-day window. So this now runs ONE paginated date query instead of 71
+    sponsor queries, and — unlike the old version — can discover approvals from
+    sponsors that are not yet on the watchlist.
     """
     since = _since(days)
+    since_s = since.strftime("%Y%m%d")
+    today = dt.date.today().strftime("%Y%m%d")
+    search = (f'submissions.submission_status_date:[{since_s} TO {today}]'
+              f' AND submissions.submission_status:"AP"')
     out = []
+    skip = 0
 
-    for name in UNIVERSE:
-        params = {"search": f'sponsor_name:"{name}"', "limit": 20}
+    while skip < FDA_MAX_RECORDS:
+        params = {"search": search, "limit": FDA_PAGE_SIZE, "skip": skip}
         try:
             r = requests.get(FDA_DRUG, params=params, headers=HEADERS,
                              timeout=REQUEST_TIMEOUT)
-            if r.status_code == 404:
-                continue
+            if r.status_code == 404:      # openFDA returns 404 for zero results
+                break
             r.raise_for_status()
-            results = r.json().get("results", [])
+            results = r.json().get("results", []) or []
         except Exception as e:  # noqa: BLE001
-            print(f"  [drugsfda] '{name}' failed: {e}")
-            continue
+            print(f"  [drugsfda] page at skip={skip} failed: {e}")
+            break
+        if not results:
+            break
 
         for app in results:
-            brand = "Undisclosed"
+            sponsor = _clean(app.get("sponsor_name", "")) or "Undisclosed"
             products = app.get("products") or []
-            if products:
-                brand = _clean(products[0].get("brand_name", "Undisclosed"))
+            brand = _clean(products[0].get("brand_name", "")) if products else ""
+            generic = _clean(products[0].get("active_ingredients", [{}])[0]
+                             .get("name", "")) if products else ""
+            brand = brand or "Undisclosed"
+
+            # The date filter matches an application if ANY of its submissions
+            # falls in range, so the specific AP action is re-checked below.
+            hit = _hits_universe(f"{sponsor} {brand} {generic}")
+            names = f"{brand} {generic}"
+
+            # The DRUG must be radiopharma — a universe sponsor is not enough.
+            # Large pharma is on the watchlist for its radioligand programmes,
+            # but admitting on sponsor alone floods the feed with every Novartis
+            # and BMS supplement (Tegretol, Eliquis, Revlimid): 65 of 67 records
+            # over a year. config.py is explicit that the universe boosts a
+            # record's rank rather than qualifying it, so it only sets
+            # in_universe here.
+            if not (_ISOTOPE_RX.search(names) or _MODALITY_RX.search(names)):
+                continue
+
             for sub in app.get("submissions", []) or []:
                 raw = sub.get("submission_status_date", "")
-                if len(raw) != 8:
+                if len(raw) != 8 or sub.get("submission_status") != "AP":
                     continue
                 date = f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
-                if dt.date.fromisoformat(date) < since:
-                    continue
-                if sub.get("submission_status") != "AP":
+                try:
+                    if dt.date.fromisoformat(date) < since:
+                        continue
+                except ValueError:
                     continue
                 out.append({
                     "date": date,
                     "source": "openFDA drugsfda",
                     "ref": app.get("application_number", ""),
-                    "text": (f"Approval action: {brand} | sponsor: {name} | "
+                    "text": (f"Approval action: {brand} | sponsor: {sponsor} | "
                              f"type: {sub.get('submission_type', '')}"),
-                    "in_universe": True,
+                    "in_universe": bool(hit),
                 })
+
+        if len(results) < FDA_PAGE_SIZE:
+            break
+        skip += FDA_PAGE_SIZE
 
     return out
 
