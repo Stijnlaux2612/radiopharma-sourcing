@@ -7,5 +7,7 @@ feed.txt
 # Local tooling
 .claude/
 __pycache__/
-*.pyc
+*.py[cod]
+.venv/
+venv/
 .DS_Store
