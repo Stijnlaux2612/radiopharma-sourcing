@@ -214,3 +214,24 @@ CMS_HCPCS_PAGE = ("https://www.cms.gov/medicare/coding-billing/"
 EMA_MIN_LOOKBACK_DAYS = 30
 EMA_MEDICINES_XLSX = ("https://www.ema.europa.eu/en/documents/report/"
                       "medicines-output-medicines-report_en.xlsx")
+
+# ---------------------------------------------------------------------------
+# FUNDING — the noisiest source by far, and the only one with no authoritative
+# publisher. Google News RSS needs no API key and its search is good enough that
+# curated queries beat a firehose. GlobeNewswire's "Financing Agreements" feed
+# was evaluated and rejected: it returns Danske Bank and Nokia manager
+# transactions, nothing radiopharma.
+#
+# Rounds are announced once, so the window is short by design — a stale funding
+# headline is not a catalyst.
+# ---------------------------------------------------------------------------
+FUNDING_MAX_LOOKBACK_DAYS = 21
+GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
+FUNDING_QUERIES = [
+    'radiopharmaceutical (financing OR raises OR "Series A" OR "Series B" OR "Series C")',
+    'radioligand therapy (financing OR raises OR funding)',
+    '"targeted alpha therapy" (financing OR raises OR funding)',
+    'radiopharma (IPO OR "private placement" OR oversubscribed)',
+    'medical isotope production (investment OR financing OR expansion)',
+    'theranostics (Series A OR Series B OR financing)',
+]

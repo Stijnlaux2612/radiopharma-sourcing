@@ -10,11 +10,15 @@ import csv
 import datetime as dt
 import io
 import re
+import xml.etree.ElementTree as ET
 import zipfile
 
 import requests
 
 from config import (
+    FUNDING_MAX_LOOKBACK_DAYS,
+    FUNDING_QUERIES,
+    GOOGLE_NEWS_RSS,
     EMA_MEDICINES_XLSX,
     EMA_MIN_LOOKBACK_DAYS,
     CMS_HCPCS_PAGE,
@@ -984,6 +988,190 @@ def pull_ema(days=LOOKBACK_DAYS):
     return out
 
 
+# --------------------------------------------------------------------------- #
+# Funding rounds
+#
+# The only source here with no authoritative publisher — everything else has a
+# regulator behind it. RUNBOOK 3.3 says to bias hard toward precision and to say
+# so if it turns out noisier than it is useful, so the gates are strict:
+#
+#   1. an explicit funding signal (verb + money, a Series letter, or an IPO)
+#   2. radiopharma relevance, EITHER a universe name or radiopharma vocabulary
+#   3. a short window — a round is announced once; a stale headline is not news
+#
+# Gate 2 is the one that costs recall. A headline like "Aktis raises $318M in
+# 2026's first biotech IPO" only qualifies because Aktis is on the watchlist;
+# an unknown company announcing a round in a headline that never says
+# "radiopharmaceutical" will be missed. That is the deliberate trade.
+#
+# Untrusted input: these are news headlines, treated purely as text to match on.
+# --------------------------------------------------------------------------- #
+
+_MONEY_RX = re.compile(
+    r"[$€£¥]\s?\d[\d,.]*\s*(?:m|bn|b|k|million|billion)?\b"
+    r"|\b\d[\d,.]*\s*(?:million|billion)\b"
+    r"|₩\s?\d[\d,.]*\s*\w*",
+    re.I,
+)
+_ROUND_RX = re.compile(
+    r"\bseries\s+[a-e]\b|\bpre-?seed\b|\bseed round\b|\bipo\b"
+    r"|\bprivate placement\b|\boversubscribed\b|\bventure round\b",
+    re.I,
+)
+_RAISE_RX = re.compile(
+    r"\brais(?:e|es|ed|ing)\b|\bsecur(?:e|es|ed)\b|\bclos(?:e|es|ed)\b"
+    r"|\bfinancing\b|\bfunding\b|\bfunds?\b|\binvest(?:s|ed|ment)\b"
+    r"|\bbacks?\b|\bnets?\b",
+    re.I,
+)
+
+
+def _is_funding_headline(title: str) -> bool:
+    """A Series/IPO mention alone counts; otherwise require a verb AND money."""
+    if _ROUND_RX.search(title):
+        return True
+    return bool(_RAISE_RX.search(title) and _MONEY_RX.search(title))
+
+
+def _rss_date(raw: str):
+    """RFC-822 pubDate -> date. Returns None rather than raising."""
+    raw = (raw or "").strip()
+    for fmt in ("%a, %d %b %Y %H:%M:%S %Z", "%a, %d %b %Y %H:%M:%S %z",
+                "%a, %d %b %Y %H:%M %Z", "%a, %d %b %Y %H:%M %z"):
+        try:
+            return dt.datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+    m = re.search(r"(\d{1,2})\s+(\w{3})\s+(\d{4})", raw)
+    if m:
+        try:
+            return dt.datetime.strptime(" ".join(m.groups()), "%d %b %Y").date()
+        except ValueError:
+            return None
+    return None
+
+
+def _is_investor_mention(title: str, name: str) -> bool:
+    """True when the watchlist name reads as the backer rather than the raiser.
+
+    Catches 'Eli Lilly-Backed …', '… backed by Novartis', 'Bayer backs …'. The
+    company actually raising is usually unnamed in these headlines, so there is
+    nothing to re-attribute the round to — dropping is the honest outcome.
+    """
+    norm = _norm(title)
+    for phrase in {_norm(name)} | {_norm(a) for a in _SHORT_ALIASES.get(name, [])}:
+        if not phrase:
+            continue
+        if re.search(re.escape(phrase) + r"[\s-]*(?:backed|led|funded)\b", norm):
+            return True
+        if re.search(re.escape(phrase) + r"\s+(?:backs|leads|invests)\b", norm):
+            return True
+        if re.search(r"\b(?:backed|led|funded)\s+by\s+" + re.escape(phrase), norm):
+            return True
+    return False
+
+
+def _headline_rank(title: str) -> tuple:
+    """Prefer the headline that names the round explicitly, then the longest."""
+    return (1 if _ROUND_RX.search(title) else 0, len(title))
+
+
+def _headline_key(title: str) -> str:
+    """Normalised key so the same round from five outlets counts once.
+
+    Content hashing alone will not collapse these — 'ICYMI: Starget Pharma
+    Closes $18M Series A…' and the original differ as strings but are one event.
+    """
+    t = re.sub(r"^\s*(icymi|update|exclusive|breaking)\s*[:\-]\s*", "", title, flags=re.I)
+    t = re.sub(r"\s+-\s+[^-]{3,40}$", "", t)        # trailing " - Outlet Name"
+    return re.sub(r"[^a-z0-9]+", "", t.lower())[:70]
+
+
+def pull_funding(days=LOOKBACK_DAYS):
+    """Radiopharma funding rounds from targeted news search."""
+    days = min(days, FUNDING_MAX_LOOKBACK_DAYS)
+    since = _since(days)
+    out, candidates = [], []
+    fetched = passed_signal = 0
+
+    for query in FUNDING_QUERIES:
+        params = {"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"}
+        try:
+            r = requests.get(GOOGLE_NEWS_RSS, params=params, headers=HEADERS,
+                             timeout=REQUEST_TIMEOUT)
+            r.raise_for_status()
+            root = ET.fromstring(r.content)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [funding] query failed ({query[:34]}…): {e}")
+            continue
+
+        for item in root.findall(".//item"):
+            title = _clean(item.findtext("title") or "")
+            if not title:
+                continue
+            fetched += 1
+            d = _rss_date(item.findtext("pubDate") or "")
+            if not d or d < since or d > dt.date.today():
+                continue
+            if not _is_funding_headline(title):
+                continue
+            passed_signal += 1
+
+            hit = _hits_universe(title)
+
+            # A watchlist name in the headline may be the INVESTOR, not the
+            # company raising: "Eli Lilly-Backed Firm Raises $315M" is AdvanCell's
+            # round, not Lilly's. Attributing it to Lilly would be a false
+            # positive of the worst kind here, so an investor-only mention is
+            # dropped rather than mislabelled.
+            if hit and _is_investor_mention(title, hit):
+                continue
+            if not (hit or _looks_radiopharma(title)):
+                continue
+
+            candidates.append({
+                "date": d,
+                "title": title,
+                "link": (item.findtext("link") or "")[:200],
+                "hit": hit,
+                # One round gets reported by every outlet in slightly different
+                # words, so headline text alone cannot collapse them. Key on the
+                # COMPANY instead: a firm does not close two distinct rounds in
+                # the same fortnight, so company + date-bucket is one event.
+                "key": (hit or _headline_key(title)[:28]),
+            })
+
+    # Collapse to one record per company-round, keeping the most informative
+    # headline — the one naming the Series letter, else the longest.
+    by_key = {}
+    for c in candidates:
+        # Company alone, not company+date-bucket: a fixed bucket boundary split
+        # the same AdvanCell round across 07-15 and 07-20. The window is <= 21
+        # days, and a firm does not close two distinct rounds inside that.
+        bucket = c["key"]
+        prev = by_key.get(bucket)
+        if prev is None or _headline_rank(c["title"]) > _headline_rank(prev["title"]):
+            if prev is not None:
+                c["date"] = min(c["date"], prev["date"])
+            by_key[bucket] = c
+        else:
+            prev["date"] = min(prev["date"], c["date"])
+
+    for c in sorted(by_key.values(), key=lambda x: x["date"], reverse=True):
+        out.append({
+            "date": c["date"].isoformat(),
+            "source": "Funding (news)",
+            "ref": c["link"],
+            "text": f"FUNDING: {c['title']}",
+            "in_universe": bool(c["hit"]),
+        })
+
+    print(f"  [funding] {fetched} headlines, {passed_signal} funding-shaped, "
+          f"{len(candidates)} relevant -> {len(out)} distinct round(s) "
+          f"(last {days}d)")
+    return out
+
+
 PULLERS = {
     "clinicaltrials": pull_clinicaltrials,
     "fda_510k": pull_fda_510k,
@@ -991,4 +1179,5 @@ PULLERS = {
     "cms": pull_cms,
     "cms_passthrough": pull_cms_passthrough,
     "ema": pull_ema,
+    "funding": pull_funding,
 }
