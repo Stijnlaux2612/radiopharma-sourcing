@@ -17,6 +17,18 @@ Two things live here and they do different jobs — keep them separate in your h
 # slips through if a run is missed.
 LOOKBACK_DAYS = 10
 
+# A trial that merely restates its current phase and status is not a catalyst —
+# 15 of 19 records in the first live week were exactly that. With this on, a
+# trial is only emitted when it carries an actual event: a phase/status
+# transition, results posted, a stop with a stated reason, or a primary
+# completion date just passed (readout imminent).
+#
+# Set False to go back to emitting every update.
+CTG_REQUIRE_SIGNAL = True
+
+# How long after primary completion a trial still counts as "readout due".
+CTG_READOUT_WINDOW_DAYS = 120
+
 # ---------------------------------------------------------------------------
 # DISCOVERY NET — intervention / modality terms for ClinicalTrials.gov v2.
 # Each term = one query per run. Broad imaging tracers (generic F-18 FDG, generic

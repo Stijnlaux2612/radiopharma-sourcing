@@ -16,6 +16,8 @@ import zipfile
 import requests
 
 from config import (
+    CTG_READOUT_WINDOW_DAYS,
+    CTG_REQUIRE_SIGNAL,
     FUNDING_MAX_LOOKBACK_DAYS,
     FUNDING_QUERIES,
     GOOGLE_NEWS_RSS,
@@ -64,7 +66,6 @@ def _norm(s: str) -> str:
 _SHORT_ALIASES = {
     "Telix Pharmaceuticals": ["telix"],
     "Y-mAbs Therapeutics": ["y-mabs"],
-    "Eli Lilly": ["lilly"],
     "Bristol Myers Squibb": ["bristol-myers squibb", "bms"],
     "TerraPower Isotopes": ["terrapower"],
     "Jubilant Radiopharma": ["jubilant draximage", "jubilant"],
@@ -77,11 +78,17 @@ _SHORT_ALIASES = {
     # spelling alone would never match the string the API actually returns.
     "GE HealthCare": ["ge hlthcare", "ge healthcare inc"],   # NOT bare 'ge'
     "Sinotau Pharmaceutical Group": ["sinotau"],
+    # drugsfda returns the trading name without the suffix
+    "Blue Earth Diagnostics": ["blue earth"],
     "QSAM Therapeutics": ["qsam"],
     # hyphen-less spelling is equally common in sponsor fields
     "Full-Life Technologies": ["full life technologies"],
     # EMA lists the EU entity, which shares no phrase with the canonical name
     "SHINE Technologies": ["shine europe"],
+    # drugsfda attributes Tauvid to Avid Radiopharmaceuticals, a Lilly
+    # subsidiary since 2010, so the pass-through record would otherwise go
+    # unmatched.
+    "Eli Lilly": ["lilly", "avid radiopharm", "avid radiopharms"],
     "ITM Isotope Technologies": ["itm medical isotopes"],
 }
 
@@ -284,6 +291,68 @@ def _pretty_phase(raw: str) -> str:
     return ", ".join(_PHASE_LABEL.get(p.strip(), p.strip()) for p in raw.split(","))
 
 
+# --------------------------------------------------------------------------- #
+# Read direction
+#
+# ClinicalTrials.gov does NOT publish whether a readout was positive or
+# negative — no field carries that, and nothing here infers it. What it does
+# publish is why a trial stopped, and whether results have been posted, which is
+# enough to separate three very different things that all look like
+# "TERMINATED" in a status field:
+#
+#   efficacy/safety  the asset failed            — directional, and negative
+#   strategic        the sponsor deprioritised it — informative, not a data read
+#   operational      sites, funding, logistics    — says nothing about the asset
+#
+# "Study terminated due to site closure" is not a failed trial. Collapsing those
+# three into one signal is what made the old trial records unusable.
+# --------------------------------------------------------------------------- #
+
+_STOP_EFFICACY_RX = re.compile(
+    r"\befficac\w*|\bfutil\w*|\bineffective\b|\black of (?:response|benefit|activity)\b"
+    r"|\bsafety\b|\btoxicit\w*|\badverse\b|\btolerab\w*|\bdeath\w*"
+    r"|\bdid not meet\b|\bfailed to (?:meet|demonstrate)\b|\bnegative (?:results?|data)\b"
+    r"|\brisk[- ]benefit\b|\bDSMB\b|\bdata (?:safety )?monitoring\b",
+    re.I,
+)
+_STOP_STRATEGIC_RX = re.compile(
+    r"\bbusiness (?:decision|reasons?)\b|\bstrategic\b|\bportfolio\b|\bprioriti\w*"
+    r"|\bdevelopment (?:program|programme|plan)\b|\bsponsor(?:'s)? decision\b"
+    r"|\bcommercial\b|\bacquisition\b|\bmerger\b",
+    re.I,
+)
+
+
+def _readout_due(pcd: str):
+    """Primary completion date if it has just passed — a readout is imminent.
+
+    Forward-looking rather than historic: the data exists but has not been
+    reported yet, which is the window where the position is still open.
+    """
+    raw = (pcd or "").strip()
+    if not raw:
+        return None
+    if len(raw) == 7:
+        raw += "-01"
+    try:
+        d = dt.date.fromisoformat(raw)
+    except ValueError:
+        return None
+    age = (dt.date.today() - d).days
+    return raw if 0 <= age <= CTG_READOUT_WINDOW_DAYS else None
+
+
+def _classify_stop(why: str) -> str:
+    """efficacy | strategic | operational — see the note above."""
+    if not why:
+        return "operational"
+    if _STOP_EFFICACY_RX.search(why):
+        return "efficacy"
+    if _STOP_STRATEGIC_RX.search(why):
+        return "strategic"
+    return "operational"
+
+
 def _describe_transition(prior: dict, phase: str, status: str) -> str:
     """Human-readable transition, or '' if nothing moved."""
     parts = []
@@ -379,6 +448,11 @@ def pull_clinicaltrials(terms=None, days=LOOKBACK_DAYS):
             lead = (sponsor.get("leadSponsor") or {}).get("name", "Undisclosed")
             date = (status.get("lastUpdatePostDateStruct") or {}).get("date", "")
 
+            why = _clean(status.get("whyStopped", "") or "")
+            results_date = (status.get("resultsFirstPostDateStruct") or {}).get("date", "")
+            has_results = bool(s.get("hasResults") or results_date)
+            pcd = (status.get("primaryCompletionDateStruct") or {}).get("date", "")
+
             if not (nct and date):
                 continue
             if len(date) == 7:          # YYYY-MM occasionally appears
@@ -392,14 +466,31 @@ def pull_clinicaltrials(terms=None, days=LOOKBACK_DAYS):
                 non_commercial += 1
                 continue
 
-            text = f"{title} | phase: {phases} | status: {state} | sponsor: {lead}"
+            # What kind of event, if any, does this record carry?
+            event = ""
+            if has_results:
+                event = (f"READOUT POSTED{f' ({results_date})' if results_date else ''}"
+                         f" — data available")
+            elif why:
+                kind = _classify_stop(why)
+                label = {"efficacy": "STOPPED — EFFICACY/SAFETY",
+                         "strategic": "STOPPED — strategic",
+                         "operational": "stopped — operational"}[kind]
+                event = f"{label}: {why}"
+            else:
+                due = _readout_due(pcd)
+                if due:
+                    event = f"READOUT DUE — primary completion {due}"
+
             current[nct] = (phases, state)
+            base_text = f"{title} | phase: {phases} | status: {state} | sponsor: {lead}"
             out.append({
                 "date": date,
                 "source": "ClinicalTrials.gov",
                 "ref": nct,
-                "text": text,
+                "text": f"{event} | {base_text}" if event else base_text,
                 "in_universe": bool(hit),
+                "_event": bool(event),      # consumed below, stripped before return
             })
 
     # --- transition detection -------------------------------------------- #
@@ -421,11 +512,28 @@ def pull_clinicaltrials(terms=None, days=LOOKBACK_DAYS):
     transitions = len(transitioned)
     upsert_trial_states((n, p, s) for n, (p, s) in current.items())
 
+    # Gate: keep only records carrying an actual event. State is written for
+    # every trial above regardless, so a trial silenced this week still has a
+    # baseline to detect next week's transition against.
+    silenced = 0
+    if CTG_REQUIRE_SIGNAL:
+        kept = []
+        for r in out:
+            if r.pop("_event", False) or r["text"].startswith("PHASE TRANSITION"):
+                kept.append(r)
+            else:
+                silenced += 1
+        out = kept
+    else:
+        for r in out:
+            r.pop("_event", None)
+
     if dropped:
         print(f"  [ctg] relevance guard dropped {dropped} off-topic hits")
     if non_commercial:
         print(f"  [ctg] sponsor filter dropped {non_commercial} academic/government records")
-    print(f"  [ctg] {len(current)} trials tracked, {transitions} transition(s) detected")
+    print(f"  [ctg] {len(current)} trials tracked, {transitions} transition(s), "
+          f"{silenced} bare update(s) silenced")
     return out
 
 
@@ -732,6 +840,72 @@ CMS_ADDENDUM_PAGE = ("https://www.cms.gov/medicare/payment/prospective-payment-s
                      "hospital-outpatient-pps/quarterly-addenda-updates")
 _PASS_THROUGH_SI = {"G", "H"}
 
+# Addendum B names the AGENT and never the company, so a pass-through record on
+# its own could not be attributed to an issuer — Blue Earth and GE HealthCare
+# were both sitting in the feed unmatched. Rather than hand-maintain an
+# agent→company table that would rot, the mapping is resolved from drugsfda,
+# which also yields the first approval date and therefore how novel the product
+# is. Only emitted records are looked up (~3 per run), and results are cached.
+_AGENT_CACHE = {}
+
+
+def _agent_token(desc: str) -> str:
+    """Leading INN from a CMS short descriptor.
+
+    'Flotufolastat f18 diag 1 mci' -> 'Flotufolastat'
+    """
+    m = re.match(r"\s*([A-Za-z][A-Za-z-]{4,})", desc or "")
+    return m.group(1) if m else ""
+
+
+def _lookup_agent(agent: str) -> dict:
+    """{'sponsor','brand','approved'} from drugsfda, or {} if unknown."""
+    if not agent:
+        return {}
+    key = agent.lower()
+    if key in _AGENT_CACHE:
+        return _AGENT_CACHE[key]
+    info = {}
+    try:
+        r = requests.get(FDA_DRUG, headers=HEADERS, timeout=REQUEST_TIMEOUT,
+                         params={"search": f'products.active_ingredients.name:"{agent}"',
+                                 "limit": 3})
+        if r.status_code != 404:
+            r.raise_for_status()
+            for app in r.json().get("results", []) or []:
+                aps = [s.get("submission_status_date", "")
+                       for s in (app.get("submissions") or [])
+                       if s.get("submission_status") == "AP"]
+                aps = [a for a in aps if len(a) == 8]
+                products = app.get("products") or []
+                info = {
+                    "sponsor": _clean(app.get("sponsor_name", "")),
+                    "brand": _clean(products[0].get("brand_name", "")) if products else "",
+                    "approved": min(aps) if aps else "",
+                }
+                break
+    except Exception as e:  # noqa: BLE001
+        print(f"  [cms-pt] agent lookup failed for {agent!r}: {e}")
+    _AGENT_CACHE[key] = info
+    return info
+
+
+def _novelty(approved: str) -> str:
+    """Years since first approval, bucketed. Pass-through on an old product is
+    a weaker signal than on a genuinely new one."""
+    if len(approved or "") != 8:
+        return "novelty unknown"
+    try:
+        d = dt.date(int(approved[:4]), int(approved[4:6]), int(approved[6:]))
+    except ValueError:
+        return "novelty unknown"
+    yrs = (dt.date.today() - d).days / 365.25
+    if yrs < 2:
+        return f"NEW ({yrs:.1f}y since approval)"
+    if yrs < 5:
+        return f"recent ({yrs:.1f}y since approval)"
+    return f"established ({yrs:.1f}y since approval)"
+
 
 def _addendum_b_url():
     """Newest OPPS Addendum B ZIP. Returns (url, quarter_date) or (None, None).
@@ -844,14 +1018,22 @@ def pull_cms_passthrough(days=LOOKBACK_DAYS):
         apc = (row[c_apc].strip() if len(row) > c_apc else "")
         rate = (row[c_rate].strip() if c_rate is not None and len(row) > c_rate else "")
         label = "PASS-THROUGH" if si in _PASS_THROUGH_SI else "pass-through expiring"
+
+        # Attribute the code to a company and establish how new the product is.
+        info = _lookup_agent(_agent_token(desc))
+        sponsor = info.get("sponsor", "")
+        brand = info.get("brand", "")
+        novelty = _novelty(info.get("approved", ""))
+        who = f" | {brand or '?'} ({sponsor})" if sponsor else " | company unresolved"
+
         out.append({
             "date": quarter.isoformat(),
             "source": "CMS OPPS pass-through",
             "ref": code,
-            "text": (f"{label}: {code} | {desc} | SI: {si or '-'} | "
-                     f"APC: {apc or '-'} | rate: {rate or '-'}"
+            "text": (f"{label}: {code} | {desc}{who} | {novelty} | "
+                     f"SI: {si or '-'} | APC: {apc or '-'} | rate: {rate or '-'}"
                      + (f" | expires: {exp}" if exp else "")),
-            "in_universe": bool(_hits_universe(desc)),
+            "in_universe": bool(_hits_universe(f"{desc} {brand} {sponsor}")),
         })
 
     print(f"  [cms-pt] {quarter:%Y-%m} addendum: {level2} Level II codes, "
