@@ -209,6 +209,71 @@ UNIVERSE = [
     "Primo Biotechnology",
 ]
 
+# ---------------------------------------------------------------------------
+# DIGEST ORDERING WEIGHTS
+#
+# These order digest.txt only. They are the DETERMINISTIC half of the scoring
+# formula — base x 2^(-age/half_life) x weight — and contain no model call, so
+# any ordering can be explained from these numbers alone.
+#
+# The thesis-fit term deliberately does NOT live here: it is judgement, it
+# belongs to the screening artifact, and nothing in this pipeline may set it.
+# feed.txt is unaffected and stays in source order; it is a contract.
+#
+# THESE MUST BE KEPT IN STEP WITH THE SCREENING ARTIFACT. If you retune weights
+# there, mirror them here or the digest and the screener will disagree.
+# ---------------------------------------------------------------------------
+CATALYST_WEIGHTS = {
+    # type                    base  half-life (days)
+    "stopped_efficacy":       (100, 60),
+    "phase_transition_ph3":   (100, 60),
+    "readout_posted":         (95,  45),
+    "ema_refusal":            (90,  45),
+    "fda_approval":           (85,  45),
+    "ema_chmp_opinion":       (85,  45),
+    "readout_due":            (82,  60),
+    "phase_transition":       (80,  60),
+    "funding":                (80,  21),
+    "cms_passthrough_gain":   (75,  120),
+    "cms_passthrough_expiry": (70,  120),
+    "ema_authorisation":      (70,  45),
+    "cms_new_code":           (65,  120),
+    "stopped_strategic":      (58,  30),
+    "ema_withdrawal":         (58,  45),
+    "cms_code_terminating":   (55,  120),
+    "fda_510k":               (40,  45),
+    "ema_ec_decision":        (25,  45),
+    "stopped_operational":    (18,  30),
+    "trial_update":           (10,  30),
+}
+
+# Materiality to the issuer, not familiarity. A Pluvicto trial update barely
+# moves Novartis; the same catalyst moves Telix.
+SEGMENT_WEIGHTS = {"pure": 1.6, "cdmo": 1.2, "none": 1.0, "large": 0.8}
+
+# Pass-through on a six-year-old product is a weaker signal than on a new one.
+NOVELTY_WEIGHTS = {"NEW": 1.0, "recent": 0.75, "established": 0.45, "unknown": 0.8}
+
+# Large pharma: the catalyst is real but immaterial to the equity.
+LARGE_PHARMA = {
+    "Novartis", "Eli Lilly", "AstraZeneca", "Bristol Myers Squibb", "Bayer",
+    "GE HealthCare", "Cardinal Health", "PETNET Solutions",
+}
+
+# Supply chain: exposed to the theme, but one customer among many.
+SUPPLY_CHAIN = {
+    "SpectronRx", "Nucleus RadioPharma", "AtomVie Global Radiopharma",
+    "Seibersdorf Laboratories", "ROTOP Pharmaka", "Moltek", "PharmaLogic",
+    "Jubilant Radiopharma", "ABX advanced biochemical compounds", "ABX-CRO",
+    "SOFIE Biosciences", "RLS Radiopharmacies", "Minerva Imaging", "Invicro",
+    "Oncodesign Services", "Median Technologies", "Macrocyclics", "CheMatech",
+    "Curium", "Isotopia", "PanTera", "Nusano", "ITM Isotope Technologies",
+    "Eckert & Ziegler", "SHINE Technologies", "NorthStar Medical Radioisotopes",
+    "Orano Med", "Thor Medical", "TerraThera", "Ionetix", "Niowave",
+    "TerraPower Isotopes", "BWXT Medical", "Nordion", "IRE ELiT",
+    "NTP Radioisotopes",
+}
+
 DB_PATH = "catalysts.db"
 USER_AGENT = "catalyst-sourcing/0.1 (research use)"
 REQUEST_TIMEOUT = 30

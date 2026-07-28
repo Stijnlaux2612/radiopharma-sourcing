@@ -135,46 +135,44 @@ def to_feed_lines(records) -> str:
 
 
 def to_digest(records) -> str:
-    """Human-readable weekly digest: leads first, then everything by source.
+    """Human-readable digest, rendered in the order given.
 
-    Ranking is NOT done here — that belongs to the screening tool. This only
-    surfaces universe matches and phase transitions, which are already-computed
-    flags, so nothing about the scoring philosophy moves into this pipeline.
+    Records may carry a `_score` dict from scoring.score(); when present the
+    score and its terms are shown so the ordering is explainable on the page.
+    This function does no ranking of its own — run.py decides the order.
     """
     if not records:
         return "No new records this run.\n"
 
-    def line(r):
-        return f"  {r['date']}  {r['source']:<22}  {r['text']}"
-
     today = _dt.date.today().isoformat()
+    scored = any(r.get("_score") for r in records)
+    hits = sum(1 for r in records if r["in_universe"])
+
     out = [f"RADIOPHARMA CATALYST DIGEST — {today}",
            "=" * 78,
-           f"{len(records)} record(s) awaiting screening"]
+           f"{len(records)} record(s) awaiting screening · {hits} on the watchlist",
+           ""]
+    if scored:
+        out += ["Ordered by deterministic score: base x 2^(-age/half-life) x weight.",
+                "Thesis-fit is NOT applied here — set it in the screening tool,",
+                "which may reorder these rows.",
+                ""]
+    out.append("-" * 78)
 
-    transitions = [r for r in records if "PHASE TRANSITION" in r["text"]]
-    leads = [r for r in records if r["in_universe"] and r not in transitions]
+    for i, r in enumerate(records, 1):
+        s = r.get("_score")
+        flag = "*" if r["in_universe"] else " "
+        if s:
+            out.append(f"\n{i:>2}.{flag} [{s['score']:6.1f}]  {r['date']}  {r['source']}")
+            terms = (f"      {s['kind']} · base {s['base']} · "
+                     f"decay {s['decay']:.3f} ({s['age']}d, hl {s['half_life']}d) · "
+                     f"{s['segment']} x{s['weight']}")
+            if s["novelty"]:
+                terms += f" · {s['novelty']} x{s['novelty_weight']}"
+            out.append(terms)
+        else:
+            out.append(f"\n{i:>2}.{flag} {r['date']}  {r['source']}")
+        out.append(f"      {r['text']}")
 
-    if transitions:
-        out += ["", f"PHASE TRANSITIONS ({len(transitions)}) — trials that moved",
-                "-" * 78]
-        out += [line(r) for r in sorted(transitions, key=_by_date)]
-
-    if leads:
-        out += ["", f"WATCHLIST MATCHES ({len(leads)})", "-" * 78]
-        out += [line(r) for r in sorted(leads, key=_by_date)]
-
-    rest = [r for r in records if r not in transitions and r not in leads]
-    if rest:
-        out += ["", f"OTHER ({len(rest)}) — by source", "-" * 78]
-        for src in sorted({r["source"] for r in rest}):
-            out.append(f"\n  [{src}]")
-            out += [line(r) for r in sorted(
-                [r for r in rest if r["source"] == src], key=_by_date)]
-
-    out.append("")
+    out += ["", "-" * 78, "* = matches the universe watchlist", ""]
     return "\n".join(out) + "\n"
-
-
-def _by_date(r):
-    return (r["date"], r["source"])

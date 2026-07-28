@@ -51,10 +51,22 @@ The pullers were written but **not tested against live endpoints**. Expect field
 paths to need adjustment on the first real run, especially openFDA's query syntax.
 Run one source at a time first (`python run.py clinicaltrials`) so failures localise.
 
-## Scoring lives elsewhere
-Classification and thesis-fit scoring run in a separate React tool (the screening
-artifact), not in this Python. This pipeline's job ends at writing `feed.txt`. Keep
-it that way — don't add LLM scoring here.
+## Scoring lives elsewhere — with one deliberate exception
+Thesis-fit scoring runs in a separate React tool (the screening artifact), not in
+this Python. **No LLM call may enter this pipeline.** That rule is unchanged.
+
+The exception, added on request: `digest.txt` is ordered by the *deterministic*
+half of the formula — `base × 2^(−age/half_life) × weight` — computed in
+`scoring.py` from constants in `config.py`. There is no model call and no fit
+term, so any ordering is explainable from those numbers alone. `feed.txt` is
+untouched and stays in source order; it is the contract with the screening tool.
+
+**`CATALYST_WEIGHTS` in config.py and the weights in the screening artifact must
+be kept in step.** They are currently identical. Retuning one without the other
+makes the digest and the screener disagree, which is the main maintenance risk
+in this design.
+
+Screening artifact: https://claude.ai/code/artifact/67206291-df8f-4fd3-813d-23daa3de88e6
 
 ## Highest-value next steps (see RUNBOOK.md for sequenced tasks)
 1. **Phase-transition detection.** The ClinicalTrials puller reports current phase
