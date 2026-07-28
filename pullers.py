@@ -488,6 +488,7 @@ def pull_clinicaltrials(terms=None, days=LOOKBACK_DAYS):
                 "date": date,
                 "source": "ClinicalTrials.gov",
                 "ref": nct,
+                "url": f"https://clinicaltrials.gov/study/{nct}",
                 "text": f"{event} | {base_text}" if event else base_text,
                 "in_universe": bool(hit),
                 "_event": bool(event),      # consumed below, stripped before return
@@ -588,6 +589,8 @@ def pull_fda_510k(terms=None, days=LOOKBACK_DAYS):
                 "date": date,
                 "source": "openFDA 510(k)",
                 "ref": k.get("k_number", ""),
+                "url": ("https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/"
+                        f"cfpmn/pmn.cfm?ID={k.get('k_number','')}"),
                 "text": f"510(k) clearance: {device} | applicant: {applicant}",
                 "in_universe": bool(_hits_universe(applicant)),
             })
@@ -671,6 +674,7 @@ def pull_fda_approvals(days=LOOKBACK_DAYS):
                     "date": date,
                     "source": "openFDA drugsfda",
                     "ref": app.get("application_number", ""),
+                    "url": _daf_url(app.get("application_number", "")),
                     "text": (f"Approval action: {brand} | sponsor: {sponsor} | "
                              f"type: {sub.get('submission_type', '')}"),
                     "in_universe": bool(hit),
@@ -804,6 +808,7 @@ def pull_cms(days=LOOKBACK_DAYS):
                 "date": d.isoformat(),
                 "source": "CMS HCPCS",
                 "ref": f["code"],
+                "url": CMS_HCPCS_PAGE,
                 "text": f"{label}: {f['code']} | {desc}",
                 "in_universe": bool(_hits_universe(desc)),
             })
@@ -833,7 +838,11 @@ def pull_cms(days=LOOKBACK_DAYS):
 # Addendum B carries CPT (Level I) descriptors that the AMA copyrights. This
 # puller keeps ONLY Level II codes — the letter-prefixed A/C/J series that CMS
 # itself maintains — and every radiopharmaceutical lives there. No CPT
-# descriptor is parsed, stored or emitted. Raised with the user before building.
+# descriptor is parsed, stored or emitted.
+#
+# Reviewed and approved by the user on 2026-07-28. If the Level II filter above
+# is ever loosened, that approval no longer covers it — CPT descriptors would
+# then be retained and the licensing position changes.
 # --------------------------------------------------------------------------- #
 
 CMS_ADDENDUM_PAGE = ("https://www.cms.gov/medicare/payment/prospective-payment-systems/"
@@ -882,12 +891,20 @@ def _lookup_agent(agent: str) -> dict:
                     "sponsor": _clean(app.get("sponsor_name", "")),
                     "brand": _clean(products[0].get("brand_name", "")) if products else "",
                     "approved": min(aps) if aps else "",
+                    "appl": _clean(app.get("application_number", "")),
                 }
                 break
     except Exception as e:  # noqa: BLE001
         print(f"  [cms-pt] agent lookup failed for {agent!r}: {e}")
     _AGENT_CACHE[key] = info
     return info
+
+
+def _daf_url(appl_no: str) -> str:
+    """FDA 'Drugs@FDA' overview page for an application number, or ''."""
+    digits = re.sub(r"\D", "", appl_no or "")
+    return (f"https://www.accessdata.fda.gov/scripts/cder/daf/"
+            f"index.cfm?event=overview.process&ApplNo={digits}") if digits else ""
 
 
 def _novelty(approved: str) -> str:
@@ -1030,6 +1047,7 @@ def pull_cms_passthrough(days=LOOKBACK_DAYS):
             "date": quarter.isoformat(),
             "source": "CMS OPPS pass-through",
             "ref": code,
+            "url": _daf_url(info.get("appl", "")) or url,
             "text": (f"{label}: {code} | {desc}{who} | {novelty} | "
                      f"SI: {si or '-'} | APC: {apc or '-'} | rate: {rate or '-'}"
                      + (f" | expires: {exp}" if exp else "")),
@@ -1158,6 +1176,7 @@ def pull_ema(days=LOOKBACK_DAYS):
                 "date": d.isoformat(),
                 "source": "EMA",
                 "ref": cell(row, "url") or name,
+                "url": cell(row, "url"),
                 "text": (f"{label}: {name}"
                          + (f" ({inn})" if inn and inn.lower() != name.lower() else "")
                          + f" | status: {status or '-'} | ATC: {atc or '-'}"
@@ -1344,6 +1363,7 @@ def pull_funding(days=LOOKBACK_DAYS):
             "date": c["date"].isoformat(),
             "source": "Funding (news)",
             "ref": c["link"],
+            "url": c["link"],
             "text": f"FUNDING: {c['title']}",
             "in_universe": bool(c["hit"]),
         })

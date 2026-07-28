@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS records (
     ref         TEXT,
     text        TEXT NOT NULL,
     in_universe INTEGER DEFAULT 0,
+    url         TEXT,
     first_seen  TEXT DEFAULT CURRENT_TIMESTAMP,
     screened    INTEGER DEFAULT 0
 );
@@ -51,6 +52,11 @@ def db():
     conn.row_factory = sqlite3.Row
     try:
         conn.executescript(SCHEMA)
+        # Databases created before source links existed lack this column.
+        # CREATE TABLE IF NOT EXISTS will not add it, so patch it in place.
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(records)")}
+        if "url" not in cols:
+            conn.execute("ALTER TABLE records ADD COLUMN url TEXT")
         yield conn
         conn.commit()
     finally:
@@ -64,10 +70,11 @@ def insert_many(records) -> int:
         for r in records:
             h = content_hash(r["source"], r.get("ref", ""), r["text"])
             cur = conn.execute(
-                "INSERT OR IGNORE INTO records (hash, date, source, ref, text, in_universe) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO records "
+                "(hash, date, source, ref, text, in_universe, url) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (h, r["date"], r["source"], r.get("ref", ""), r["text"],
-                 int(r.get("in_universe", False))),
+                 int(r.get("in_universe", False)), r.get("url", "")),
             )
             new += cur.rowcount
     return new
@@ -173,6 +180,8 @@ def to_digest(records) -> str:
         else:
             out.append(f"\n{i:>2}.{flag} {r['date']}  {r['source']}")
         out.append(f"      {r['text']}")
+        if r.get("url"):
+            out.append(f"      -> {r['url']}")
 
     out += ["", "-" * 78, "* = matches the universe watchlist", ""]
     return "\n".join(out) + "\n"
