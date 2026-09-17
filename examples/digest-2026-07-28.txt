@@ -1,0 +1,68 @@
+RADIOPHARMA CATALYST DIGEST — 2026-07-28
+==============================================================================
+11 record(s) awaiting screening · 10 on the watchlist
+
+Ordered by deterministic score: base x 2^(-age/half-life) x weight.
+Thesis-fit is NOT applied here — set it in the screening tool,
+which may reorder these rows.
+
+------------------------------------------------------------------------------
+
+ 1.* [  98.3]  2026-07-20  Funding (news)
+      funding · base 80 · decay 0.768 (8d, hl 21d) · pure x1.6
+      FUNDING: Big pharma boost radiopharmaceuticals as AdvanCell raises ₩466 billion - CHOSUNBIZ - Chosunbiz
+      -> https://news.google.com/rss/articles/CBMigAFBVV95cUxNMmM5a2cwWkJ6LTA5UEhMMlV1N2tGTTRLbDVzZm9pbGJkTUNYcTZPTElzQWtMQ0FFUnlPa092Rmc2UEYwbDk2bURQdTBtM1NSekItc0ktOWg0Rl9BUDNCRzVFVnJiWVJTQW1Tc3dfTmxNZXBwcW1
+
+ 2.  [  86.6]  2026-07-22  ClinicalTrials.gov
+      readout_posted · base 95 · decay 0.912 (6d, hl 45d) · none x1.0
+      READOUT POSTED (2025-05-29) — data available | High Resolution, 18F-PSMA PET-MRI Before Prostate Cancer HIFU or Radical Prostatectomy | phase: PHASE2 | status: TERMINATED | sponsor: Alessandro D'Agnolo
+      -> https://clinicaltrials.gov/study/NCT04461509
+
+ 3.* [  82.7]  2026-07-23  ClinicalTrials.gov
+      stopped_strategic · base 58 · decay 0.891 (5d, hl 30d) · pure x1.6
+      STOPPED — strategic: Change in development program indication | A Dose Finding Study to Treat Bone Tumor(s) | phase: PHASE1 | status: TERMINATED | sponsor: QSAM Therapeutics, Inc.
+      -> https://clinicaltrials.gov/study/NCT06008483
+
+ 4.* [  77.0]  2026-07-01  CMS OPPS pass-through
+      cms_passthrough_gain · base 75 · decay 0.856 (27d, hl 120d) · pure x1.6 · recent x0.75
+      PASS-THROUGH: A9608 | Flotufolastat f18 diag 1 mci | POSLUMA (BLUE EARTH) | recent (3.2y since approval) | SI: G | APC: 9254 | rate: $727.56 | expires: *
+      -> https://www.accessdata.fda.gov/scripts/cder/daf/index.cfm?event=overview.process&ApplNo=216023
+
+ 5.* [  64.8]  2026-07-27  ClinicalTrials.gov
+      readout_due · base 82 · decay 0.989 (1d, hl 60d) · large x0.8
+      READOUT DUE — primary completion 2026-07-02 | The Phase 1, Open-label, PET Trial Designed to Investigate the Effect of AZD2389 on FAP Occupancy in the Liver in Participants With Advanced Liver Fibrosis. | phase: PHASE1 | status: COMPLETED | sponsor: AstraZeneca
+      -> https://clinicaltrials.gov/study/NCT07069725
+
+ 6.* [  51.3]  2026-07-01  CMS OPPS pass-through
+      cms_passthrough_gain · base 75 · decay 0.856 (27d, hl 120d) · large x0.8 · NEW x1.0
+      PASS-THROUGH: A9611 | Flurpiridaz f18, diag, 1 mci | FLYRCADO (GE HLTHCARE) | NEW (1.8y since approval) | SI: G | APC: 2065 | rate: $530.00
+      -> https://www.accessdata.fda.gov/scripts/cder/daf/index.cfm?event=overview.process&ApplNo=215168
+
+ 7.* [  23.1]  2026-07-01  CMS OPPS pass-through
+      cms_passthrough_gain · base 75 · decay 0.856 (27d, hl 120d) · large x0.8 · established x0.45
+      PASS-THROUGH: A9601 | Flortaucipir inj 1 millicuri | TAUVID (AVID RADIOPHARMS INC) | established (6.2y since approval) | SI: G | APC: 0709 | rate: $371.00 | expires: *
+      -> https://www.accessdata.fda.gov/scripts/cder/daf/index.cfm?event=overview.process&ApplNo=212123
+
+ 8.* [  21.1]  2026-07-27  ClinicalTrials.gov
+      stopped_operational · base 18 · decay 0.977 (1d, hl 30d) · cdmo x1.2
+      stopped — operational: Study terminated due to site closure. | Open-label Study to Evaluate Brain α-Synuclein Deposition Using PET and [18F]MK-0947 in Parkinson's Disease | phase: EARLY_PHASE1 | status: TERMINATED | sponsor: Invicro
+      -> https://clinicaltrials.gov/study/NCT07348250
+
+ 9.* [  17.7]  2026-07-20  EMA
+      ema_ec_decision · base 25 · decay 0.884 (8d, hl 45d) · large x0.8
+      EC decision: Pluvicto (lutetium (177Lu) vipivotide tetraxetan) | status: Authorised | ATC: V10XX | MAH: Novartis Europharm Limited
+      -> https://www.ema.europa.eu/en/medicines/human/EPAR/pluvicto
+
+10.* [  16.4]  2026-07-15  EMA
+      ema_ec_decision · base 25 · decay 0.819 (13d, hl 45d) · large x0.8
+      EC decision: Lutathera (lutetium (177Lu) oxodotreotide) | status: Authorised | ATC: V10XX04 | MAH: Novartis Europharm Limited
+      -> https://www.ema.europa.eu/en/medicines/human/EPAR/lutathera
+
+11.* [  14.7]  2026-07-08  EMA
+      ema_ec_decision · base 25 · decay 0.735 (20d, hl 45d) · large x0.8
+      EC decision: Locametz (gozetotide) | status: Authorised | ATC: V09I | MAH: Novartis Europharm Limited
+      -> https://www.ema.europa.eu/en/medicines/human/EPAR/locametz
+
+------------------------------------------------------------------------------
+* = matches the universe watchlist
+

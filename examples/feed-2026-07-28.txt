@@ -1,0 +1,11 @@
+2026-07-27 | ClinicalTrials.gov | stopped — operational: Study terminated due to site closure. | Open-label Study to Evaluate Brain α-Synuclein Deposition Using PET and [18F]MK-0947 in Parkinson's Disease | phase: EARLY_PHASE1 | status: TERMINATED | sponsor: Invicro
+2026-07-27 | ClinicalTrials.gov | READOUT DUE — primary completion 2026-07-02 | The Phase 1, Open-label, PET Trial Designed to Investigate the Effect of AZD2389 on FAP Occupancy in the Liver in Participants With Advanced Liver Fibrosis. | phase: PHASE1 | status: COMPLETED | sponsor: AstraZeneca
+2026-07-23 | ClinicalTrials.gov | STOPPED — strategic: Change in development program indication | A Dose Finding Study to Treat Bone Tumor(s) | phase: PHASE1 | status: TERMINATED | sponsor: QSAM Therapeutics, Inc.
+2026-07-22 | ClinicalTrials.gov | READOUT POSTED (2025-05-29) — data available | High Resolution, 18F-PSMA PET-MRI Before Prostate Cancer HIFU or Radical Prostatectomy | phase: PHASE2 | status: TERMINATED | sponsor: Alessandro D'Agnolo
+2026-07-20 | EMA | EC decision: Pluvicto (lutetium (177Lu) vipivotide tetraxetan) | status: Authorised | ATC: V10XX | MAH: Novartis Europharm Limited
+2026-07-20 | Funding (news) | FUNDING: Big pharma boost radiopharmaceuticals as AdvanCell raises ₩466 billion - CHOSUNBIZ - Chosunbiz
+2026-07-15 | EMA | EC decision: Lutathera (lutetium (177Lu) oxodotreotide) | status: Authorised | ATC: V10XX04 | MAH: Novartis Europharm Limited
+2026-07-08 | EMA | EC decision: Locametz (gozetotide) | status: Authorised | ATC: V09I | MAH: Novartis Europharm Limited
+2026-07-01 | CMS OPPS pass-through | PASS-THROUGH: A9601 | Flortaucipir inj 1 millicuri | TAUVID (AVID RADIOPHARMS INC) | established (6.2y since approval) | SI: G | APC: 0709 | rate: $371.00 | expires: *
+2026-07-01 | CMS OPPS pass-through | PASS-THROUGH: A9608 | Flotufolastat f18 diag 1 mci | POSLUMA (BLUE EARTH) | recent (3.2y since approval) | SI: G | APC: 9254 | rate: $727.56 | expires: *
+2026-07-01 | CMS OPPS pass-through | PASS-THROUGH: A9611 | Flurpiridaz f18, diag, 1 mci | FLYRCADO (GE HLTHCARE) | NEW (1.8y since approval) | SI: G | APC: 2065 | rate: $530.00
